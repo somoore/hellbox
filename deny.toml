@@ -30,3 +30,11 @@ allow = [
 name = "option-ext"
 version = "0.2.0"
 allow = ["MPL-2.0"]
+
+# Supply-chain: only allow crates from crates.io. An unknown registry or an
+# unpinned git dependency (no rev) is a supply-chain risk, so deny both.
+# Enforced by `cargo deny check sources` (CI rust-deny job + scripts/check-deps.sh).
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

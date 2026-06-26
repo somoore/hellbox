@@ -43,8 +43,9 @@ jobs:
           command: check
           # advisories gates RUSTSEC CVEs (the careful rustls/webpki pinning in
           # Cargo.toml has no regression guard otherwise); licenses keeps the
-          # allow-list policy. Verified locally: `cargo deny check advisories licenses`.
-          command-arguments: advisories licenses
+          # allow-list policy; sources rejects crates from unknown registries / unpinned
+          # git deps (supply-chain). Verified: `cargo deny check advisories licenses sources`.
+          command-arguments: advisories licenses sources
 
   shell:
     name: shellcheck
@@ -92,3 +93,66 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y shellcheck
           shellcheck capsule/rootfs/opt/capsule/*.sh
+
+  # Hardcoded-secret scan over the full history (pre-commit only sees the diff).
+  # Run the gitleaks binary directly — the v2 action now requires GITHUB_TOKEN and
+  # carries org-license friction; the plain CLI has neither and matches our other jobs.
+  secrets:
+    name: secrets (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks
+        run: |
+          VER=8.30.1
+          curl -fsSL -o /tmp/gitleaks.tgz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${VER}/gitleaks_${VER}_linux_x64.tar.gz"
+          sudo tar -xzf /tmp/gitleaks.tgz -C /usr/local/bin gitleaks
+          gitleaks version
+      - name: Scan full history
+        run: gitleaks detect --no-banner --redact --source .
+
+  # Python lint (capsule stream/input/focus scripts). Reads .flake8.
+  python:
+    name: python (flake8)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install flake8
+      - run: flake8 .
+
+  # JS syntax check for the one demo .mjs (no eslint footprint for ~40 lines).
+  javascript:
+    name: javascript (node --check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: for f in $(git ls-files '*.mjs' '*.js'); do node --check "$f"; done
+
+  # Supply-chain pin/hash gate across cargo/pip/npm.
+  deps:
+    name: dependency pins
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pin/hash gate
+        run: scripts/check-deps.sh
+
+  # Duplicate-code detection across Rust/Python/Bash/JS (threshold 0 in .jscpd.json).
+  duplication:
+    name: duplicate code (jscpd)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npx --yes jscpd@4 --config .jscpd.json

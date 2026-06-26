@@ -4,8 +4,7 @@ use anyhow::{Context, Result};
 
 use crate::aws::Aws;
 use crate::config::Config;
-use crate::lifecycle::{microvm_endpoint, poll_microvm_state};
-use crate::poll::PollOpts;
+use crate::lifecycle::await_running;
 use crate::state::State;
 
 pub async fn run(name: &str) -> Result<()> {
@@ -26,27 +25,8 @@ pub async fn run(name: &str) -> Result<()> {
         .context("resume_microvm")?;
     tracing::info!(target: "ldoom::resume", "resuming {microvm_id}");
 
-    let final_state = poll_microvm_state(
-        &aws.microvm,
-        &format!("microvm {name}"),
-        &microvm_id,
-        &["RUNNING", "TERMINATED", "FAILED"],
-        PollOpts::default(),
-    )
-    .await?;
+    await_running(&aws.microvm, &mut state, name, &microvm_id).await?;
 
-    let endpoint = microvm_endpoint(&aws.microvm, &microvm_id).await.ok();
-
-    state.upsert(name, |c| {
-        c.state = Some(final_state.clone());
-        if endpoint.is_some() {
-            c.endpoint = endpoint.clone();
-        }
-    })?;
-
-    if final_state != "RUNNING" {
-        anyhow::bail!("'{name}' did not resume (state {final_state})");
-    }
     println!("resumed '{name}' — RUNNING");
     Ok(())
 }

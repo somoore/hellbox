@@ -1,9 +1,32 @@
 # Fast local guards. Install once: `pip install pre-commit && pre-commit install`.
-# Heavier checks (clippy, cargo test, cfn-lint, capsule lint) run in CI — see
-# .github/workflows/ci.yml. Bypass in an emergency with `git commit --no-verify`.
+# Heavier checks (clippy, cargo test, cfn-lint, capsule lint, jscpd duplicate
+# scan) run in CI — see .github/workflows/ci.yml. Bypass in an emergency with
+# `git commit --no-verify`.
 repos:
+  # Secrets: scan the staged diff before it can be committed.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  # Python lint via pre-commit's managed env (isolated; immune to a broken local
+  # python/flake8 shim). Reads .flake8 for config.
+  - repo: https://github.com/pycqa/flake8
+    rev: 7.1.1
+    hooks:
+      - id: flake8
+
   - repo: local
     hooks:
+      # Supply-chain: every shipped dependency must be pinned to a release with a
+      # hash. Fails on unpinned/unhashed crates/wheels; warns on dev-only soft-pins.
+      - id: check-deps
+        name: dependency pin/hash gate (cargo/pip/npm)
+        language: script
+        entry: scripts/check-deps.sh
+        files: '(Cargo\.(toml|lock)|requirements.*\.txt|package\.json|deny\.toml|\.mjs|\.js)$'
+        pass_filenames: false
+
       # Catches the M3 class: a capsule wheel hash that no longer matches the wheel
       # the Dockerfile will pull. Resolves against cp311/aarch64 so it works on any host.
       - id: capsule-reqs
@@ -13,6 +36,7 @@ repos:
         files: ^capsule/requirements\.txt$
         pass_filenames: false
 
+      # Rust lint.
       - id: cargo-fmt
         name: cargo fmt --check
         language: system
@@ -20,9 +44,16 @@ repos:
         files: ^rs-cli/.*\.rs$
         pass_filenames: false
 
+      # Bash lint.
       - id: shellcheck
         name: shellcheck
         language: system
         entry: bash -c 'shellcheck "$@"' --
         files: \.sh$
-        # embedded heredoc Python in capsule scripts is fine; shellcheck only reads shell.
+
+      # JavaScript syntax check (no eslint footprint for the one dev .mjs).
+      - id: node-check
+        name: node --check (js syntax)
+        language: system
+        entry: bash -c 'for f in "$@"; do node --check "$f" || exit 1; done' --
+        files: \.(mjs|js)$

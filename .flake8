@@ -1,0 +1,7 @@
+[flake8]
+# Capsule scripts favor compact, readable stream/X11 plumbing over PEP8's 79-col
+# default. 120 keeps lines honest without churning the existing code.
+max-line-length = 120
+# E203/W503 conflict with common formatter style; E704 (def on one line) is fine.
+extend-ignore = E203, W503, E704
+exclude = .git, __pycache__, rs-cli/target, .venv, venv

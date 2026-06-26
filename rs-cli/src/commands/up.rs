@@ -5,8 +5,7 @@ use aws_sdk_lambdamicrovms::types::IdlePolicy;
 
 use crate::aws::Aws;
 use crate::config::Config;
-use crate::lifecycle::{microvm_endpoint, poll_microvm_state};
-use crate::poll::PollOpts;
+use crate::lifecycle::await_running;
 use crate::state::State;
 
 const MAX_DURATION_SECS: i32 = 8 * 60 * 60;
@@ -65,27 +64,7 @@ pub async fn run(name: &str) -> Result<()> {
         c.state = Some(run.state().as_str().to_string());
     })?;
 
-    let final_state = poll_microvm_state(
-        &aws.microvm,
-        &format!("microvm {name}"),
-        &microvm_id,
-        &["RUNNING", "TERMINATED", "FAILED"],
-        PollOpts::default(),
-    )
-    .await?;
-
-    let endpoint = microvm_endpoint(&aws.microvm, &microvm_id).await.ok();
-
-    state.upsert(name, |c| {
-        c.state = Some(final_state.clone());
-        if endpoint.is_some() {
-            c.endpoint = endpoint.clone();
-        }
-    })?;
-
-    if final_state != "RUNNING" {
-        anyhow::bail!("microvm '{name}' did not reach RUNNING (state {final_state})");
-    }
+    await_running(&aws.microvm, &mut state, name, &microvm_id).await?;
 
     println!("up '{name}': {microvm_id} RUNNING");
     Ok(())

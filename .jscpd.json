@@ -1,0 +1,10 @@
+{
+  "pattern": "{rs-cli/src/**/*.rs,capsule/rootfs/opt/capsule/*.py,scripts/*.mjs,**/*.sh}",
+  "minLines": 12,
+  "minTokens": 70,
+  "threshold": 0,
+  "reporters": ["consoleFull"],
+  "absolute": true,
+  "gitignore": true,
+  "ignore": ["**/target/**", "**/node_modules/**", "**/.venv/**"]
+}

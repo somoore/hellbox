@@ -89,29 +89,34 @@ Full design is in [docs/architecture.md](docs/architecture.md), the security mod
 </details>
 
 <details>
-<summary><b>One-click prerequisites</b> (Launch Stack)</summary>
+<summary><b>Run it yourself</b> (without <code>deploy.sh</code>)</summary>
 
-This button uses CloudFormation to create only the prerequisites: the S3 build bucket and the
-two IAM roles. After it finishes, copy the stack outputs into `~/.lambdadoom/config.toml` and
-run `ldoom build`, `ldoom up`, `ldoom open`. For the full setup in one step (prerequisites,
-binary, build, launch, and open), use `./deploy.sh` instead.
+`./deploy.sh` in the Quickstart above is the easy path: it creates the stack, downloads the
+`ldoom` binary, builds the image, launches it, and opens the tab. Do the steps below only if
+you would rather drive each piece by hand.
+
+**1. Create the prerequisite stack** (an S3 build bucket and two IAM roles). Either click
+Launch Stack:
 
 [![Launch Stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/create/review?templateURL=https://lambdadoom-launch-932930471665.s3.amazonaws.com/doom.yaml&stackName=LambdaDoom)
 
-</details>
-
-<details>
-<summary><b>Manual control</b> (the <code>ldoom</code> CLI)</summary>
-
-`deploy.sh` wraps one CloudFormation stack ([`deploy/doom.yaml`](deploy/doom.yaml)) and the
-`ldoom` CLI. To drive them yourself, deploy the stack from the template file, copy its outputs
-into `~/.lambdadoom/config.toml`, then run the lifecycle:
+or run the CLI:
 
 ```bash
-# one-time: create the S3 bucket + IAM roles from the local template
 aws cloudformation deploy --region us-east-1 --stack-name LambdaDoom \
   --template-file deploy/doom.yaml --capabilities CAPABILITY_IAM
+```
 
+**2. Get the `ldoom` binary.** Download the one for your system from
+[Releases](https://github.com/somoore/LambdaDoom/releases), or build from source:
+`cd rs-cli && make release`.
+
+**3. Write `~/.lambdadoom/config.toml`** from the stack outputs (region, artifact bucket, and
+the build and execution role ARNs).
+
+**4. Drive the lifecycle:**
+
+```bash
 ldoom build      # zip capsule -> S3 -> build image (compiles engine, fetches WAD) -> CREATED
 ldoom up         # launch a MicroVM from the image          (PENDING -> RUNNING)
 ldoom open       # mint a token, open the browser tab, play DOOM
@@ -121,9 +126,6 @@ ldoom down       # terminate the MicroVM (keeps the image so up can relaunch)
 ldoom rm         # full teardown: terminate and delete the image
 ldoom ps         # list capsules and their state
 ```
-
-`ldoom` is the prebuilt binary `deploy.sh` downloads. To build it yourself instead, the source
-is in [`rs-cli/`](rs-cli/): `cd rs-cli && make release`.
 
 </details>
 

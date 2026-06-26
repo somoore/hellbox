@@ -221,7 +221,7 @@ injects the headers and forwards over TLS. The token lives only in the proxy.
 
 The proxy (`rs-cli/src/proxy.rs`, on `hyper` 1.x) handles a request one of three ways:
 
-1. **`/__shrink/*` goes to the local control plane.** Never forwarded. Drives suspend,
+1. **`/__lambdadoom/*` goes to the local control plane.** Never forwarded. Drives suspend,
    resume, and state with SigV4 (which works while the VM is frozen) and powers the injected
    control panel.
 2. **A WebSocket upgrade** dials the upstream `wss://` with the auth and port headers, answers
@@ -230,13 +230,14 @@ The proxy (`rs-cli/src/proxy.rs`, on `hyper` 1.x) handles a request one of three
    page the proxy splices in the control panel.
 
 A path-prefix table maps one loopback origin onto the four internal services via
-`X-aws-proxy-port`: `/shrinkaudio` to 6902, `/shrinkvideo` to 6903, `/shrinkinput` to 6904,
+`X-aws-proxy-port`: `/ldoom/audio` to 6902, `/ldoom/video` to 6903, `/ldoom/input` to 6904,
 and everything else to the display port 6901.
 
-The `/__shrink/*` endpoints run AWS calls with your credentials, so they are hardened against
-CSRF and DNS rebinding: the `Host` header must be loopback, the `Origin` (when present) must
-be the loopback origin, and `suspend` and `resume` require `POST`. Full threat model in
-[security.md](security.md).
+The `/__lambdadoom/*` endpoints run AWS calls with your credentials, so they are hardened
+against CSRF, DNS rebinding, and blind local calls: the `Host` header must be loopback, the
+`Origin` (when present) must be the loopback origin, the request must carry the per-session
+HttpOnly `ldoom_control` cookie, and `suspend` and `resume` require `POST`. Full threat model
+in [security.md](security.md).
 
 ---
 
@@ -290,13 +291,14 @@ LambdaDoom/
 ├── uninstall.sh            # remove everything (VM, image, stack, binary, local state)
 ├── deploy/doom.yaml        # CloudFormation: S3 bucket + IAM build/exec roles (Launch Stack)
 ├── capsule/                # the MicroVM image
-│   ├── Dockerfile          #   compiles SDL2 + Chocolate Doom from source, fetches the WAD
+│   ├── Dockerfile          #   compiles pinned SDL2 + Chocolate Doom, verifies WAD SHA256
 │   ├── rootfs/opt/capsule/ #   start.sh, run_app.sh, focus.py, *_ws.py
 │   └── app/                # optional WAD override drop zone (gitignored)
 ├── rs-cli/                 # the Rust `ldoom` CLI (shipped prebuilt; build only if you want)
 │   ├── Cargo.toml  Makefile
 │   └── src/                #   main, config, state, aws, poll, browser, proxy, commands/
-└── docs/                   # architecture, security, microvm-ground-truth
+└── docs/                   # architecture, security, ground truth, media, generalizing
 ```
 
-LambdaDoom depends on the official `aws-sdk-lambdamicrovms` crate from crates.io.
+LambdaDoom depends on the official `aws-sdk-lambdamicrovms` crate from crates.io. The capsule
+pins and SHA256-verifies every external tarball/WAD it downloads during the image build.

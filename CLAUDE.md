@@ -18,8 +18,7 @@ The headline UX: `ldoom open --name <X>` → DOOM appears in a browser tab.
 > **Binary & config:** the binary is **`ldoom`** (Cargo package `lambdadoom`); config +
 > state live at **`~/.lambdadoom/`**; infra is the CloudFormation stack
 > **`deploy/doom.yaml`** (S3 + build/exec roles). The README, docs/architecture.md,
-> docs/security.md, and docs/microvm-ground-truth.md track this reality. (The proxy's
-> internal `/__shrink/*` control path kept its name.)
+> docs/security.md, and docs/microvm-ground-truth.md track this reality.
 
 **Proven live** (account `test_AccountA`, in `us-east-1`, `us-east-2`, AND `us-west-2`):
 
@@ -86,14 +85,15 @@ in the proxy; the browser never sees it.**
 
 It is a `hyper` 1.x server. Each request takes one of three paths:
 
-1. **`/__shrink/*` → local control plane.** Never forwarded upstream. Drives
+1. **`/__lambdadoom/*` → local control plane.** Never forwarded upstream. Drives
    suspend/resume/state via SigV4 (works while the VM is frozen). This is what the
    injected control bar calls. **Hardened against CSRF / DNS-rebinding** (it runs AWS
    calls with the user's creds): the `Host` header must be loopback, the `Origin` (if
-   present) must be our loopback origin, and `suspend`/`resume` require `POST`. A
-   cross-origin or rebound page is rejected with 403. (Residual: a non-browser process
-   running as the same local user can still reach it — out of scope, it already owns your
-   session. `is_loopback_authority` in `rs-cli/src/proxy.rs`.)
+   present) must be our loopback origin, the request must carry the per-session HttpOnly
+   `ldoom_control` cookie, and `suspend`/`resume` require `POST`. A cross-origin,
+   rebound, or blind local request is rejected with 403. (Residual: a same-user process
+   that can scrape the browser/proxy session is still out of scope. See `is_loopback_authority` and
+   `cookie_has_control_secret` in `rs-cli/src/proxy.rs`.)
 2. **WebSocket upgrade → `handle_ws`.** Dials the upstream `wss://<endpoint><path>` with
    `tokio-tungstenite`, carrying `X-aws-proxy-auth` + `X-aws-proxy-port` + any requested
    subprotocol; answers the browser handshake locally (derives `Sec-WebSocket-Accept`),
@@ -104,8 +104,8 @@ It is a `hyper` 1.x server. Each request takes one of three paths:
    the response back. On the root HTML it splices in the Suspend/Resume control bar.
 
 **Port routing.** One loopback origin fans out to the four internal services via a
-path-prefix table that sets `X-aws-proxy-port`: `/shrinkaudio`→6902, `/shrinkvideo`→6903,
-`/shrinkinput`→6904, everything else → the display port **6901**.
+path-prefix table that sets `X-aws-proxy-port`: `/ldoom/audio`→6902,
+`/ldoom/video`→6903, `/ldoom/input`→6904, everything else → the display port **6901**.
 
 **The noVNC display path (single-socket, simplest):**
 1. Browser loads `http://127.0.0.1:6080/vnc.html` (+ assets) over HTTP. The proxy forwards
@@ -167,8 +167,9 @@ These were verified live; trust them.
   or runs/resumes restore a blank screen. `build.rs` sets `readyTimeoutInSeconds = 600`.
 
 **Image & base / build**
-- `CreateMicrovmImage` sends `additionalOsCapabilities:["ALL"]` (privileged caps;
-  harmless) and `readyTimeoutInSeconds:600`.
+- `CreateMicrovmImage` does **not** request `additionalOsCapabilities:["ALL"]`; the capsule
+  is native ARM Chocolate Doom and does not need the old x86 translation capability.
+  `readyTimeoutInSeconds` is 600.
 - The server-side Docker build fails **fast** (~2 min) for a compile error and **slow**
   (~6 min, runs the gate) for a render/readiness failure. Read build logs in CloudWatch
   log group `/aws/lambda-microvms/<image-name>` (the messages contain a unicode arrow, so
@@ -269,7 +270,7 @@ single-port noVNC pixel-check is `http://127.0.0.1:6080/vnc.html`.
 
 `ldoom open` injects a **Suspend/Resume control panel** into the served page (in the
 Fork B proxy, so the capsule image is never rebuilt and any capsule gets it). The proxy
-exposes local control endpoints — `GET /__shrink/state`, `POST /__shrink/{suspend,resume}`
+exposes local control endpoints — `GET /__lambdadoom/state`, `POST /__lambdadoom/{suspend,resume}`
 — that drive the control plane with the caller's creds; the browser never sees them. See
 `rs-cli/src/proxy.rs`:
 - **`open` tolerates a SUSPENDED capsule** so the control bar is reachable while frozen;

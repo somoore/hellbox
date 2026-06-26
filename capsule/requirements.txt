@@ -1,0 +1,34 @@
+# Hash-pinned Python dependencies for the AL2023/aarch64 capsule build.
+# Generated from Linux aarch64 cp311 wheels.
+certifi==2026.6.17 \
+    --hash=sha256:2227dcbaafe0d2f59279d1762ddddc37783ed4354594f194ffc31d20f41fc3db
+cffi==2.0.0 \
+    --hash=sha256:730cacb21e1bdff3ce90babf007d0a0917cc3e6492f336c2f0134101e0944f93
+charset-normalizer==3.4.7 \
+    --hash=sha256:202389074300232baeb53ae2569a60901f7efadd4245cf3a3bf0617d60b439d7
+cryptography==49.0.0 \
+    --hash=sha256:36d1709f992593689b45bda411498d62c6e365f2ca00b84657d4dadd24de16db
+idna==3.18 \
+    --hash=sha256:7f952cbe720b688055e3f87de14f5c3e5fdaa8bc3928985c4077ca689de849a2
+jwcrypto==1.5.8 \
+    --hash=sha256:85aeb475f808d56bbc2f2ed1f6f73e6a317c4011a4321505f02f0aed695a3742
+numpy==2.2.6 \
+    --hash=sha256:b64d8d4d17135e00c8e346e0a738deb17e754230d7e0810ac5012750bbd85a5a
+pycparser==3.0 \
+    --hash=sha256:b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992
+python-xlib==0.33 \
+    --hash=sha256:c3534038d42e0df2f1392a1b30a15a4ff5fdc2b86cfa94f072bf11b10a164398
+redis==8.0.1 \
+    --hash=sha256:47daa35a058c23468d6437f17a8c76882cb316b838ef763036af99b96cedd743
+requests==2.34.2 \
+    --hash=sha256:2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0
+six==1.17.0 \
+    --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274
+typing-extensions==4.15.0 \
+    --hash=sha256:f0fa19c6845758ab08074a0cfa8b7aecb71c999ca73d62883bc25cc018c4e548
+urllib3==2.7.0 \
+    --hash=sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897
+websockets==16.0 \
+    --hash=sha256:7be95cfb0a4dae143eaed2bcba8ac23f4892d8971311f1b06f3c6b78952ee70b
+websockify==0.13.0 \
+    --hash=sha256:ac497a8dafc7f51d28ca989f01cdf5f8add663a497d425a56b159dcb8d6a314c

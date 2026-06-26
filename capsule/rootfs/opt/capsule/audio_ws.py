@@ -1,22 +1,7 @@
-#!/usr/bin/env python3
-"""Audio WebSocket server (Opus, Lever 2).
+#!/usr/bin/env python3.11
+"""Opus audio WebSocket on :6902.
 
-On each client connection: capture the capsule sink's monitor with `parec`, pipe it
-into `ffmpeg` which encodes **Opus @ ~96 kbps** in an Ogg stream, demux the Ogg pages
-back into raw Opus packets, and stream those packets to the browser. The browser
-decodes them with the WebCodecs `AudioDecoder` and plays via Web Audio.
-
-Why Opus: raw s16le/44100/stereo PCM is ~1.4 Mbps (~0.635 GB/hr). Opus @96 kbps is
-~0.045 GB/hr — a ~13-15x egress cut on the audio half — at transparent quality and
-low latency (20 ms frames).
-
-Wire protocol (binary WebSocket frames):
-  * frame #1  = the Opus identification header (`OpusHead`) — the decoder description.
-  * frames 2+ = one raw Opus packet each (a 20 ms audio frame).
-The `OpusTags` comment header is dropped (the client doesn't need it). Because ffmpeg
-starts a fresh Ogg stream per connection, `OpusHead` is always the first packet.
-
-Listens on 0.0.0.0:6902.
+Frame 1 is OpusHead. Later frames are raw 20 ms Opus packets.
 """
 import asyncio
 import subprocess
@@ -24,13 +9,13 @@ import websockets
 
 DEVICE = "capsule.monitor"
 PORT = 6902
-RATE = 48000          # Opus runs natively at 48 kHz — match it to avoid resampling.
+RATE = 48000
 CHANNELS = 2
 BITRATE = "96k"
 
 
 def _start_pipeline():
-    """parec -> ffmpeg(libopus/ogg). Returns (parec_proc, ffmpeg_proc)."""
+    """Start parec -> ffmpeg(libopus/ogg)."""
     parec = subprocess.Popen(
         ["parec", "--format=s16le", f"--rate={RATE}", f"--channels={CHANNELS}",
          "--latency-msec=30", "-d", DEVICE],
@@ -41,19 +26,18 @@ def _start_pipeline():
          "-f", "s16le", "-ar", str(RATE), "-ac", str(CHANNELS), "-i", "pipe:0",
          "-c:a", "libopus", "-b:a", BITRATE, "-application", "audio",
          "-frame_duration", "20",
-         # Flush a tiny Ogg page per packet so latency stays ~one frame, not ~1 s.
+         # One Ogg page per packet keeps latency near one frame.
          "-page_duration", "20000", "-flush_packets", "1",
          "-f", "ogg", "pipe:1"],
         stdin=parec.stdout, stdout=subprocess.PIPE,
     )
-    # Let parec receive SIGPIPE if ffmpeg dies.
     if parec.stdout:
         parec.stdout.close()
     return parec, ffmpeg
 
 
 def _read_exactly(stream, n):
-    """Blocking read of exactly n bytes; b'' on EOF."""
+    """Read exactly n bytes, or b'' on EOF."""
     buf = bytearray()
     while len(buf) < n:
         chunk = stream.read(n - len(buf))
@@ -64,13 +48,8 @@ def _read_exactly(stream, n):
 
 
 def _read_ogg_page(stream):
-    """Read one Ogg page; return the list of complete Opus packets it carries.
-
-    Ogg page = 'OggS' | ver(1) | type(1) | granule(8) | serial(4) | seq(4) |
-    crc(4) | nsegs(1) | segtable(nsegs) | data. A packet ends at the first lacing
-    segment < 255 (our 20 ms Opus frames are < 255 bytes, so one segment each).
-    """
-    # Resync to the 'OggS' capture pattern (robust against any partial read).
+    """Read one Ogg page and return complete Opus packets."""
+    # Resync to OggS after any partial read.
     cap = _read_exactly(stream, 4)
     if not cap:
         return None
@@ -96,8 +75,6 @@ def _read_ogg_page(stream):
             packets.append(data[pos:pos + cur])
             pos += cur
             cur = 0
-    # A trailing cur>0 means a packet continues on the next page; for 20 ms Opus
-    # frames this never happens, so we ignore the (theoretical) continuation.
     return packets
 
 

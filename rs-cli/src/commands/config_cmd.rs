@@ -1,17 +1,11 @@
-//! `ldoom config` — view and change persistent settings in `~/.lambdadoom/config.toml`.
-//!
-//! Settings are the "just works, or doesn't, based on config" knobs — no flags to
-//! remember. The CloudFormation-emitted fields (bucket, role ARNs, …) are shown but
-//! not meant to be hand-edited here.
+//! View and change persistent CLI settings.
 
 use anyhow::{Result, bail};
 
 use crate::config::Config;
 
-/// The user-tunable setting keys (everything else in config.toml is CloudFormation output).
 const TUNABLE_KEYS: &[&str] = &["idle_suspend_minutes", "display"];
 
-/// `ldoom config show` — print the resolved settings.
 pub fn show() -> Result<()> {
     let cfg = Config::load()?;
     println!("settings ({}):", Config::path()?.display());
@@ -31,7 +25,6 @@ pub fn show() -> Result<()> {
     Ok(())
 }
 
-/// `ldoom config set <key> <value>`.
 pub fn set(key: &str, value: &str) -> Result<()> {
     let mut cfg = Config::load()?;
     match key {
@@ -78,7 +71,6 @@ pub fn set(key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-/// `ldoom config unset <key>` — clear an optional setting.
 pub fn unset(key: &str) -> Result<()> {
     let mut cfg = Config::load()?;
     match key {

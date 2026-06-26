@@ -1,5 +1,4 @@
-//! One module per `ldoom` subcommand. Each `run(...)` loads config + state,
-//! does its API dance, and persists the result.
+//! Subcommand handlers.
 
 pub mod build;
 pub mod config_cmd;

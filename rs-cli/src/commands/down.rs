@@ -1,4 +1,4 @@
-//! `ldoom down` — terminate the capsule and clear its runtime fields from state.
+//! Terminate a capsule and clear runtime state.
 
 use anyhow::{Context, Result};
 
@@ -22,9 +22,8 @@ pub async fn run(name: &str) -> Result<()> {
         .send()
         .await
         .context("terminate_microvm")?;
-    tracing::info!(target: "shrink::down", "terminated {microvm_id}");
+    tracing::info!(target: "ldoom::down", "terminated {microvm_id}");
 
-    // Keep the image (so `up` can relaunch); drop the live-VM fields.
     state.upsert(name, |c| {
         c.microvm_id = None;
         c.endpoint = None;

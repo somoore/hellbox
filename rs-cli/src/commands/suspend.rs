@@ -1,10 +1,11 @@
-//! `ldoom suspend` — freeze the live capsule, poll until SUSPENDED.
+//! Suspend a capsule and wait for SUSPENDED.
 
 use anyhow::{Context, Result};
 
 use crate::aws::Aws;
 use crate::config::Config;
-use crate::poll::{PollOpts, poll_until};
+use crate::lifecycle::poll_microvm_state;
+use crate::poll::PollOpts;
 use crate::state::State;
 
 pub async fn run(name: &str) -> Result<()> {
@@ -23,27 +24,14 @@ pub async fn run(name: &str) -> Result<()> {
         .send()
         .await
         .context("suspend_microvm")?;
-    tracing::info!(target: "shrink::suspend", "suspending {microvm_id}");
+    tracing::info!(target: "ldoom::suspend", "suspending {microvm_id}");
 
-    let id = microvm_id.clone();
-    let final_state = poll_until(
+    let final_state = poll_microvm_state(
+        &aws.microvm,
         &format!("microvm {name}"),
+        &microvm_id,
         &["SUSPENDED", "TERMINATED", "FAILED"],
         PollOpts::default(),
-        || {
-            let aws = &aws;
-            let id = id.clone();
-            async move {
-                let out = aws
-                    .microvm
-                    .get_microvm()
-                    .microvm_identifier(&id)
-                    .send()
-                    .await
-                    .context("get_microvm")?;
-                Ok(out.state().as_str().to_string())
-            }
-        },
     )
     .await?;
 

@@ -1,27 +1,7 @@
-#!/usr/bin/env python3
-"""Input WebSocket server (XTEST, Lever 3 — the reverse channel for H.264 mode).
+#!/usr/bin/env python3.11
+"""Input WebSocket on :6904.
 
-The H.264 video path (video_ws.py :6903) streams the Xvnc display (:1) to the
-browser one-way. This file is its reverse channel: the browser sends keyboard and
-mouse events as JSON over a WebSocket, and we inject them into X display :1 using
-the XTEST extension (python-xlib). Together they replace what noVNC gave us for
-free in VNC mode — a fully interactive app — but over the DIY low-egress codec.
-
-Xvnc :1 runs with `-SecurityTypes None`, so we open the display with no X auth.
-
-Wire protocol (TEXT/JSON frames, client -> server):
-  * {"t":"k","down":true|false,"key":"<JS KeyboardEvent.key>"}
-      key is e.g. "ArrowUp"/"ArrowDown"/"ArrowLeft"/"ArrowRight", a modifier name
-      ("Control","Alt","Shift","Meta"), a named key (" ","Enter","Escape","Tab",
-      "Backspace"), or a single printable char ("a","Z","1",".").
-  * {"t":"m","x":<int 0..1280>,"y":<int 0..720>}   absolute pointer move.
-  * {"t":"b","button":0|1|2,"down":true|false}     0=left,1=middle,2=right.
-
-Each event is wrapped in try/except so one malformed event never kills the
-connection. The XTEST calls are blocking but trivially fast, so we call them
-directly inside the async handler.
-
-Listens on 0.0.0.0:6904.
+Receives JSON keyboard/mouse events and injects them into X display :1 via XTEST.
 """
 import asyncio
 import json
@@ -34,7 +14,7 @@ PORT = 6904
 
 d = display.Display(':1')
 
-# JS KeyboardEvent.key name -> X keysym for the non-printable / named keys.
+# Non-printable JS key names.
 SPECIAL_KEYS = {
     "ArrowUp": XK.XK_Up,
     "ArrowDown": XK.XK_Down,
@@ -53,13 +33,12 @@ SPECIAL_KEYS = {
 
 
 def _keysym_for(key):
-    """Map a JS KeyboardEvent.key to an X keysym, or 0 (NoSymbol) if unmappable."""
+    """Map a JS key name to an X keysym."""
     if key in SPECIAL_KEYS:
         return SPECIAL_KEYS[key]
     if isinstance(key, str) and len(key) == 1:
         ks = XK.string_to_keysym(key)
         if ks == 0 and key.isupper():
-            # e.g. "Z" may not resolve directly; fall back to the lowercase keysym.
             ks = XK.string_to_keysym(key.lower())
         return ks
     return 0
@@ -69,10 +48,10 @@ def _handle_key(msg):
     key = msg.get("key")
     keysym = _keysym_for(key)
     if not keysym:
-        return  # NoSymbol — nothing we can inject
+        return
     kc = d.keysym_to_keycode(keysym)
     if not kc:
-        return  # no keycode bound to this keysym
+        return
     evt = X.KeyPress if msg.get("down") else X.KeyRelease
     xtest.fake_input(d, evt, kc)
     d.sync()
@@ -84,7 +63,7 @@ def _handle_move(msg):
 
 
 def _handle_button(msg):
-    button = int(msg.get("button", 0)) + 1  # X buttons are 1-based (1=left,2=mid,3=right)
+    button = int(msg.get("button", 0)) + 1
     evt = X.ButtonPress if msg.get("down") else X.ButtonRelease
     xtest.fake_input(d, evt, button)
     d.sync()
@@ -102,7 +81,6 @@ async def handler(ws):
             elif t == "b":
                 _handle_button(msg)
         except Exception:
-            # One bad event must never tear down the connection.
             pass
 
 

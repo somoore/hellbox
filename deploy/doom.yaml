@@ -1,27 +1,20 @@
 AWSTemplateFormatVersion: '2010-09-09'
 
 Description: >
-  LambdaDoom prerequisites. The `doom` CLI drives the Lambda MicroVM lifecycle from
-  your machine; this stack only provisions what it needs in your account: an S3
-  bucket for build contexts and the two IAM roles CreateMicrovmImage (buildRoleArn)
-  and RunMicrovm (executionRoleArn) assume. After deploy, copy the Outputs into
-  ~/.lambdadoom/config.toml. Creates no network connectors on purpose, so MicroVMs
-  get the Lambda-managed defaults (JWE-auth HTTPS ingress + internet egress).
-
-  These resources reproduce the configuration verified working for LambdaDoom; the
-  role trust principal and permissions match the live roles exactly.
+  LambdaDoom prerequisites: build artifact bucket and IAM roles for Lambda MicroVMs.
+  Copy Outputs into ~/.lambdadoom/config.toml after deploy.
 
 Parameters:
   BuildServicePrincipal:
     Type: String
     Default: lambda.amazonaws.com
+    AllowedValues:
+      - lambda.amazonaws.com
     Description: >
-      Service principal the build and execution roles trust. lambda.amazonaws.com is
-      verified working for Lambda MicroVMs; override only if AWS docs change it.
+      Service principal trusted by the build and execution roles.
 
 Resources:
-  # Holds the zipped Dockerfile + capsule context that CreateMicrovmImage reads.
-  # Contexts are disposable, so expire them after 3 days. Private + encrypted.
+  # Short-lived private build contexts.
   ArtifactBucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -42,7 +35,25 @@ Resources:
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
 
-  # buildRoleArn: assumed during the image build to read the context + write logs.
+  ArtifactBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ArtifactBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt ArtifactBucket.Arn
+              - !Sub '${ArtifactBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+
+  # Role used while building the MicroVM image.
   BuildRole:
     Type: AWS::IAM::Role
     Properties:
@@ -55,6 +66,9 @@ Resources:
             Action:
               - sts:AssumeRole
               - sts:TagSession
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
       Policies:
         - PolicyName: lambdadoom-build
           PolicyDocument:
@@ -70,9 +84,7 @@ Resources:
                   - logs:PutLogEvents
                 Resource: !Sub 'arn:aws:logs:*:${AWS::AccountId}:*'
 
-  # executionRoleArn: optional role the running MicroVM assumes. No permissions in
-  # this demo (the VM never calls back into AWS). Add policies if your capsule needs
-  # them (logs, secrets, etc.).
+  # Runtime role. Add policies only if the capsule needs AWS access.
   ExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -85,6 +97,9 @@ Resources:
             Action:
               - sts:AssumeRole
               - sts:TagSession
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
 
 Outputs:
   Region:

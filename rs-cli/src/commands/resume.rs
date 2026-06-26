@@ -1,14 +1,11 @@
-//! `ldoom resume` — thaw the capsule (~2.6s), poll until RUNNING.
-//!
-//! Note: the CSPRNG-reseed-on-resume mitigation (docs/architecture.md §7) lives
-//! *inside* the capsule (its `/resume` hook bounces KasmVNC's TLS listener); the
-//! CLI just drives the lifecycle call.
+//! Resume a capsule and wait for RUNNING.
 
 use anyhow::{Context, Result};
 
 use crate::aws::Aws;
 use crate::config::Config;
-use crate::poll::{PollOpts, poll_until};
+use crate::lifecycle::{microvm_endpoint, poll_microvm_state};
+use crate::poll::PollOpts;
 use crate::state::State;
 
 pub async fn run(name: &str) -> Result<()> {
@@ -27,39 +24,18 @@ pub async fn run(name: &str) -> Result<()> {
         .send()
         .await
         .context("resume_microvm")?;
-    tracing::info!(target: "shrink::resume", "resuming {microvm_id}");
+    tracing::info!(target: "ldoom::resume", "resuming {microvm_id}");
 
-    let id = microvm_id.clone();
-    let final_state = poll_until(
+    let final_state = poll_microvm_state(
+        &aws.microvm,
         &format!("microvm {name}"),
+        &microvm_id,
         &["RUNNING", "TERMINATED", "FAILED"],
         PollOpts::default(),
-        || {
-            let aws = &aws;
-            let id = id.clone();
-            async move {
-                let out = aws
-                    .microvm
-                    .get_microvm()
-                    .microvm_identifier(&id)
-                    .send()
-                    .await
-                    .context("get_microvm")?;
-                Ok(out.state().as_str().to_string())
-            }
-        },
     )
     .await?;
 
-    // Endpoint may change across resume; refresh it.
-    let endpoint = aws
-        .microvm
-        .get_microvm()
-        .microvm_identifier(&microvm_id)
-        .send()
-        .await
-        .ok()
-        .map(|o| o.endpoint().to_string());
+    let endpoint = microvm_endpoint(&aws.microvm, &microvm_id).await.ok();
 
     state.upsert(name, |c| {
         c.state = Some(final_state.clone());

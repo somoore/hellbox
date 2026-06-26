@@ -1,14 +1,10 @@
-//! ldoom — run native DOOM inside a resumable AWS Lambda MicroVM, streamed to a
-//! browser tab. (Cargo package `lambdadoom`; the installed command is `ldoom`.)
-//!
-//! `build` (zip→S3→create image→poll) · `up` (run→poll RUNNING) · `open` (mint
-//! token→open tab, the magic) · `suspend`/`resume` · `down` · `ps`. State lives
-//! in `~/.lambdadoom/{config.toml,state.json}`. See docs/architecture.md §3/§9.
+//! CLI for running DOOM in an AWS Lambda MicroVM.
 
 mod aws;
 mod browser;
 mod commands;
 mod config;
+mod lifecycle;
 mod poll;
 mod state;
 
@@ -26,23 +22,22 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Bake the app into a MicroVM image (zip -> S3 -> create-microvm-image -> poll).
+    /// Bake the app into a MicroVM image.
     Build {
         #[arg(long)]
         name: String,
         #[arg(long)]
         app: Option<String>,
-        /// Build context dir (default: ./capsule). Use to build an alternate capsule.
+        /// Build context dir (default: ./capsule).
         #[arg(long = "capsule-dir")]
         capsule_dir: Option<String>,
     },
-    /// Launch a MicroVM from the image (run-microvm -> poll RUNNING).
+    /// Launch a MicroVM from the image.
     Up {
         #[arg(long)]
         name: String,
     },
-    /// Open the running capsule in a browser tab (mint token -> start Fork B
-    /// loopback proxy -> open tab). The "double-click".
+    /// Open the running capsule in a browser tab.
     Open {
         #[arg(long)]
         name: String,
@@ -50,32 +45,32 @@ enum Cmd {
         #[arg(long = "no-open")]
         no_open: bool,
     },
-    /// View or change persistent settings in ~/.lambdadoom/config.toml.
+    /// View or change persistent settings.
     Config {
         #[command(subcommand)]
         action: ConfigAction,
     },
-    /// Freeze the capsule (suspend-microvm).
+    /// Freeze the capsule.
     Suspend {
         #[arg(long)]
         name: String,
     },
-    /// Thaw the capsule (resume-microvm, ~2.6s).
+    /// Thaw the capsule.
     Resume {
         #[arg(long)]
         name: String,
     },
-    /// Terminate the capsule (terminate-microvm).
+    /// Terminate the capsule.
     Down {
         #[arg(long)]
         name: String,
     },
-    /// Full teardown: terminate the microvm, delete the image, drop it from state.
+    /// Delete the microvm image and local state.
     Rm {
         #[arg(long)]
         name: String,
     },
-    /// List known capsules (reads ~/.lambdadoom/state.json; --refresh reconciles via list-microvms).
+    /// List known capsules.
     Ps {
         #[arg(long)]
         refresh: bool,
@@ -94,17 +89,14 @@ enum ConfigAction {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // rustls 0.23 needs an explicit process-default CryptoProvider when the dependency
-    // tree carries more than one (aws-lc-rs via the AWS SDK + ring via the WebSocket TLS
-    // stack). Without this the loopback proxy's WSS upstream panics at the TLS handshake
-    // (a regression from the rustls-webpki vuln fix; the WS path was never re-exercised).
+    // rustls needs one default provider when AWS SDK and WSS deps both bring TLS.
     #[cfg(feature = "proxy")]
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "shrink=info,info".into()),
+                .unwrap_or_else(|_| "ldoom=info,lambdadoom=info,info".into()),
         )
         .init();
 

@@ -31,10 +31,11 @@ multi-tenant service and is not hardened as one. This is the honest threat model
 - **The browser never sees the token.** The proxy injects it server side, so it cannot leak
   into page JavaScript, history, or logs.
 - **Loopback-only proxy.** It binds `127.0.0.1`, not your LAN or the internet.
-- **Hardened control endpoints.** `/__shrink/{state,suspend,resume}` drive the control plane
-  with your credentials, so they require a loopback `Host`, a loopback `Origin` when present,
-  and `POST` for `suspend` and `resume`. A cross-origin or DNS-rebound page gets a 403. See
-  `is_loopback_authority` in `src/proxy.rs` and its test.
+- **Hardened control endpoints.** `/__lambdadoom/{state,suspend,resume}` drive the control
+  plane with your credentials, so they require a loopback `Host`, a loopback `Origin` when
+  present, an HttpOnly per-session `ldoom_control` cookie, and `POST` for `suspend` and
+  `resume`. A cross-origin, DNS-rebound, or blind local request gets a 403. See
+  `is_loopback_authority` and `cookie_has_control_secret` in `src/proxy.rs` and their tests.
 - **Firecracker isolation in your own account.** No shared multi-tenant surface.
 - **Least-privilege IAM.** The build role has only `s3:GetObject` on the artifact bucket plus
   CloudWatch Logs writes. The execution role has no permissions, since the VM never calls back
@@ -45,22 +46,24 @@ multi-tenant service and is not hardened as one. This is the honest threat model
 
 The parts I deliberately left out of scope:
 
-- **A local process running as you** can reach `127.0.0.1:6080` and the `/__shrink/*`
-  endpoints directly, since it is not bound by same-origin policy and can forge headers. Out
-  of scope: a process running as you already owns your shell and credentials. Those endpoints
-  only suspend, resume, or read state for the one VM you own, so the worst case is freezing or
-  thawing your own game. For defense in depth, add a per-session secret to `ldoom open`.
+- **A local process running as you** can reach `127.0.0.1:6080` directly, since it is not
+  bound by same-origin policy. The per-session `ldoom_control` cookie blocks blind calls to
+  the control endpoints, but a same-user process that can scrape the browser session or proxy
+  traffic is still out of scope: a process running as you already owns your shell and
+  credentials. Those endpoints only suspend, resume, or read state for the one VM you own, so
+  the worst case is freezing or thawing your own game.
 - **Your AWS credentials live on your machine** (via Granted, SSO, or environment variables),
   as with any AWS CLI or SDK use. They are never committed, and `.gitignore` excludes `.env`,
   `*.pem`, `*.key`, `aws-credentials*`, and `~/.lambdadoom/`. The binary reads credentials
   through the standard AWS chain and never writes them; `~/.lambdadoom/` holds only non-secret
   config and capsule state.
 - **The prebuilt binary is a supply-chain dependency.** `deploy.sh` downloads `ldoom` from this
-  repo's [GitHub Releases](https://github.com/somoore/LambdaDoom/releases), built in CI by the
-  [release workflow](../.github/workflows/release.yml) from this source. To avoid trusting a
-  prebuilt artifact, build it yourself (`cd rs-cli && make release`) and point `deploy.sh` at it
-  with `LDOOM_BIN`. The binary runs locally with your credentials, so only run a release you
-  trust.
+  repo's [GitHub Releases](https://github.com/somoore/LambdaDoom/releases), verifies the
+  release SHA256 sidecar, and verifies the GitHub artifact attestation when `gh` is available.
+  Release builds are produced by the [release workflow](../.github/workflows/release.yml) from
+  this source. To avoid trusting a prebuilt artifact, build it yourself (`cd rs-cli && make
+  release`) and point `deploy.sh` at it with `LDOOM_BIN`. The binary runs locally with your
+  credentials, so only run a release you trust.
 - **Entropy after a snapshot.** A resumed VM replays frozen entropy, so a CSPRNG seeded before
   the snapshot repeats its output. AWS terminates TLS, so the in-VM hop is plain and this is not
   exercised here. A capsule that terminates TLS in-VM must reseed on resume. See section 7 of
@@ -78,11 +81,6 @@ owner directly rather than posting a public exploit.
 
 ## Legal and scope
 
-LambdaDoom ships only the shareware `DOOM1.WAD` plus GPLv2 Chocolate Doom, both fetched at build
-time and never committed. It never ships the retail `DOOM.WAD` or `DOOM2.WAD`. DOOM is a
-trademark of its respective owners.
-
-This is an independent, unofficial project, not for sale, and not affiliated with or endorsed by
-AWS, Amazon.com, or id Software. AWS, AWS Lambda, and Firecracker are trademarks of Amazon.com,
-Inc. or its affiliates. LambdaDoom runs on AWS services in your own account, under your own
-agreement with AWS, and you are responsible for any charges it incurs.
+LambdaDoom does not include or distribute retail DOOM game assets. By default, the build process
+downloads the shareware `DOOM1.WAD` and builds Chocolate Doom at image build time. See
+[LEGAL.md](../LEGAL.md) for the full legal notice.

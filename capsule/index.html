@@ -18,7 +18,7 @@
   body{display:flex;flex-direction:column;background:var(--bg);color:var(--text);
     font-family:var(--font-ui);overflow:hidden}
 
-  /* ---- top bar ---- */
+  /* top bar */
   #bar{display:flex;align-items:center;justify-content:space-between;height:64px;
     flex-shrink:0;padding:0 24px;background:linear-gradient(180deg,var(--panel-top) 0%,var(--panel-bot) 100%);
     border-bottom:1px solid var(--hairline);box-shadow:inset 0 1px 0 rgba(255,255,255,.03)}
@@ -55,7 +55,7 @@
   .audio-btn.on .ico-off{display:none}
   .audio-btn.on .ico-on{display:flex}
 
-  /* ---- game stage ---- */
+  /* game stage */
   #wrap{position:relative;flex:1;min-height:0;overflow:hidden;
     background:radial-gradient(125% 90% at 50% 102%,rgba(255,107,26,.12) 0%,rgba(255,107,26,0) 46%),#050608;
     box-shadow:inset 0 0 220px 50px rgba(0,0,0,.65),inset 0 1px 0 rgba(255,255,255,.02)}
@@ -63,7 +63,7 @@
   #wrap canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
     display:block;background:#000;outline:none;z-index:1}
 
-  /* ---- boot / resuming overlay ---- */
+  /* boot overlay */
   #boot{position:absolute;inset:0;z-index:5;display:flex;flex-direction:column;
     align-items:center;justify-content:center;gap:22px;pointer-events:none;
     background:radial-gradient(80% 60% at 50% 45%,rgba(255,107,26,.06) 0%,rgba(0,0,0,0) 60%)}
@@ -85,7 +85,7 @@
     animation:pulse 1.4s ease-in-out infinite}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
 
-  /* ---- controls hint ---- */
+  /* controls hint */
   #hint{position:absolute;left:20px;bottom:20px;z-index:4;display:flex;align-items:center;gap:14px;
     height:40px;padding:0 16px;border-radius:11px;pointer-events:none;
     background:rgba(9,10,13,.72);border:1px solid #1F232A;box-shadow:0 10px 30px rgba(0,0,0,.45);
@@ -97,7 +97,7 @@
     padding:0 7px;border-radius:5px;background:var(--keycap);border:1px solid #2A2E35;border-bottom-width:2px;
     font-family:var(--font-mono);font-weight:600;font-size:11px;color:#C7CBD2}
 
-  /* ---- responsive ---- */
+  /* responsive */
   @media (max-width:680px){
     #bar{height:54px;padding:0 14px}
     .mark{width:34px;height:28px;font-size:14px}
@@ -157,14 +157,11 @@
 
 <script>
 const setStatus = m => { document.getElementById('status').textContent = m; };
-// Display backend: H.264/WebCodecs is the DEFAULT (so bare `/` shows the full game);
-// pass ?display=vnc to fall back to noVNC.
+// H.264 is default; ?display=vnc uses noVNC.
 const H264 = new URLSearchParams(location.search).get('display') !== 'vnc';
-// Resumed-from-suspend reload (the proxy adds ?resumed=1) shows "Resuming" copy.
 const RESUMED = new URLSearchParams(location.search).get('resumed') === '1';
 const wrap = document.getElementById('wrap');
-// Actual source resolution (the app may run at e.g. 640x480); learned from the first
-// decoded frame and used for BOTH canvas sizing and input coordinate mapping.
+// Learned from the first decoded frame.
 let vidW = 1280, vidH = 720;
 
 if (RESUMED) {
@@ -175,7 +172,6 @@ if (RESUMED) {
   document.getElementById('livelabel').textContent = 'RESUMING';
 }
 
-// First decoded frame (or VNC connect): hide the boot overlay, flip the status to LIVE.
 let isLive = false;
 function goLive() {
   if (isLive) return; isLive = true;
@@ -193,7 +189,6 @@ if (H264) {
   startInput(canvas);
   canvas.focus();
 } else {
-  // noVNC connects its WS to same-origin path "websockify" (proxy -> :6901).
   const ifr = document.createElement('iframe');
   ifr.src = 'vnc.html?autoconnect=1&resize=remote&path=websockify&reconnect=1';
   ifr.setAttribute('allow', 'autoplay');
@@ -201,10 +196,8 @@ if (H264) {
   wrap.appendChild(ifr);
 }
 
-// ---- H.264 video: WS /shrinkvideo -> WebCodecs VideoDecoder -> canvas ----
+// H.264: WS /ldoom/video -> WebCodecs -> canvas.
 // Each binary frame is [1 byte: 1=key,0=delta] + a raw Annex-B H.264 access unit.
-// We wait for the first keyframe, then decode frames straight to a canvas — no MSE
-// buffering, so latency stays low.
 function startVideo(canvas) {
   if (!('VideoDecoder' in window)) {
     setStatus('video needs WebCodecs (use Chrome/Edge)');
@@ -215,8 +208,6 @@ function startVideo(canvas) {
   let frames = 0, bytes = 0, sawKey = false, vts = 0;
   const dec = new VideoDecoder({
     output: frame => {
-      // Match the canvas to the real source size (so drawImage is 1:1 and input
-      // coordinates map correctly); CSS scales the canvas to fill the viewport.
       const w = frame.displayWidth || frame.codedWidth;
       const h = frame.displayHeight || frame.codedHeight;
       if (w && h && (vidW !== w || vidH !== h || canvas.width !== w)) {
@@ -229,11 +220,10 @@ function startVideo(canvas) {
     },
     error: e => setStatus('video decode error: ' + e.message),
   });
-  // Baseline profile, level 3.1 (matches the capsule's x264 settings). Annex-B mode
-  // (no `description`) — the keyframe AUs carry in-band SPS/PPS.
+  // Baseline 3.1, Annex-B with in-band SPS/PPS.
   dec.configure({ codec: 'avc1.42E01F', optimizeForLatency: true, hardwareAcceleration: 'no-preference' });
 
-  const ws = new WebSocket('ws://' + location.host + '/shrinkvideo');
+  const ws = new WebSocket('ws://' + location.host + '/ldoom/video');
   ws.binaryType = 'arraybuffer';
   ws.onopen  = () => setStatus('connected (H.264) — waiting for keyframe');
   ws.onclose = () => setStatus('video closed');
@@ -255,11 +245,11 @@ function startVideo(canvas) {
     (bytes * 8 / 1000 | 0) + ' kbit total'), 1000);
 }
 
-// ---- Input: capture keyboard/mouse, send to WS /shrinkinput (-> XTEST on :1) ----
+// Input: keyboard/mouse -> WS /ldoom/input.
 function startInput(canvas) {
-  const ws = new WebSocket('ws://' + location.host + '/shrinkinput');
+  const ws = new WebSocket('ws://' + location.host + '/ldoom/input');
   const send = o => { if (ws.readyState === 1) ws.send(JSON.stringify(o)); };
-  // Keys we must not let the browser act on (scrolling, focus change, etc.).
+  // Prevent browser shortcuts that steal gameplay input.
   const SWALLOW = new Set([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab']);
   window.addEventListener('keydown', e => {
     send({ t: 'k', down: true, key: e.key });
@@ -269,7 +259,7 @@ function startInput(canvas) {
     send({ t: 'k', down: false, key: e.key });
     if (SWALLOW.has(e.key)) e.preventDefault();
   });
-  // Absolute pointer: map canvas display coords -> the 1280x720 source.
+  // Canvas coords -> source coords.
   canvas.addEventListener('mousemove', e => {
     const r = canvas.getBoundingClientRect();
     const x = (e.clientX - r.left) / r.width * vidW;
@@ -281,14 +271,8 @@ function startInput(canvas) {
   canvas.addEventListener('contextmenu', e => e.preventDefault());
 }
 
-// ---- Audio (shared by both display modes): WS /shrinkaudio -> Opus -> Web Audio ----
-// The speaker button toggles sound: first click builds the Opus pipeline; further
-// clicks mute/unmute by suspending/resuming the AudioContext (the WS stays connected).
-// The server streams OPUS (~18x less egress than raw PCM):
-//   * frame #1  = the Opus identification header (OpusHead) -> decoder description.
-//   * frames 2+ = one raw Opus packet each (a 20 ms / 48 kHz / stereo frame).
-// Playback SCHEDULES each decoded 20 ms frame back-to-back on the Web Audio clock
-// (gapless), with an adaptive lead that only grows on real underruns.
+// Audio: WS /ldoom/audio -> Opus -> Web Audio.
+// Frame 1 is OpusHead; later frames are raw 20 ms Opus packets.
 const audioBtn = document.getElementById('go');
 let audioCtx = null, audioOn = false;
 function setAudioUI(on) {
@@ -345,7 +329,7 @@ function enableAudio() {
 
   let configured = false;
   let ts = 0;                          // microseconds; +20 ms per Opus frame.
-  const ws = new WebSocket("ws://" + location.host + "/shrinkaudio");
+  const ws = new WebSocket("ws://" + location.host + "/ldoom/audio");
   ws.binaryType = "arraybuffer";
   ws.onmessage = ev => {
     const buf = new Uint8Array(ev.data);

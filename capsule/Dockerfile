@@ -1,64 +1,63 @@
-# LambdaDoom capsule: native aarch64 Chocolate Doom, rendered into a headless X
-# server (TigerVNC) and streamed to a browser tab. The display is served by
-# noVNC/websockify on :6901; H.264 video on :6903, Opus audio on :6902, and a JSON
-# keyboard/mouse channel on :6904 give a tab you can SEE, HEAR, and PLAY.
-#
-# The whole engine is built in the image: SDL2 + SDL2_mixer + SDL2_net + Chocolate
-# Doom are compiled from source (Amazon Linux 2023 ships no SDL2), and the shareware
-# DOOM1.WAD is fetched at build time. Drop your own IWAD/PWADs in capsule/app/ to
-# override; otherwise that directory can be empty.
+# LambdaDoom capsule: native aarch64 Chocolate Doom streamed to the browser.
 FROM public.ecr.aws/lambda/microvms:al2023-minimal
 
-# ---- Display + audio + build/runtime deps ----
-# Display + unpack tooling + audio.
-RUN dnf install -y tigervnc-server xterm xsetroot python3-pip tar gzip xz binutils which procps-ng \
+ARG FFMPEG_RELEASE=autobuild-2026-06-26-13-36
+ARG FFMPEG_ASSET=ffmpeg-n8.1.2-linuxarm64-gpl-8.1.tar.xz
+ARG FFMPEG_SHA256=42be928da25b3e1f7dc271b78a0087dbfcf4738df1d7bf46d158a86eedb285da
+ARG NOVNC_VERSION=1.5.0
+ARG NOVNC_SHA256=6a73e41f98388a5348b7902f54b02d177cb73b7e5eb0a7a0dcf688cc2c79b42a
+ARG SDL2_VERSION=2.30.9
+ARG SDL2_SHA256=24b574f71c87a763f50704bbb630cbe38298d544a1f890f099a4696b1d6beba4
+ARG SDL2_MIXER_VERSION=2.8.0
+ARG SDL2_MIXER_SHA256=1cfb34c87b26dbdbc7afd68c4f545c0116ab5f90bbfecc5aebe2a9cb4bb31549
+ARG SDL2_NET_VERSION=2.2.0
+ARG SDL2_NET_SHA256=4e4a891988316271974ff4e9585ed1ef729a123d22c08bd473129179dc857feb
+ARG CHOCOLATE_DOOM_VERSION=3.0.1
+ARG CHOCOLATE_DOOM_SHA256=a54383beef6a52babc5b00d58fcf53a454f012ced7b1936ba359b13f1f10ac66
+ARG DOOM1_WAD_COMMIT=fcf22d9773c62835724f2d25c40933ef051f6600
+ARG DOOM1_WAD_SHA256=1d7d43be501e67d927e415e0b8f3e29c3bf33075e859721816f652a526cac771
+
+# Display, audio, build/runtime deps.
+RUN dnf install -y tigervnc-server xterm xsetroot python3.11 python3.11-pip tar gzip xz binutils which procps-ng \
         shadow-utils pulseaudio pulseaudio-utils \
     && dnf clean all
-# X11 / GL / audio libs the SDL2 build and the X stack link against.
+# SDL/X/audio runtime libs.
 RUN dnf install -y glib2 libX11 libXext libXrender libXrandr libXcursor libXfixes \
         libXi libXcomposite libXinerama libxcb libxkbcommon libxkbcommon-x11 \
         libXScrnSaver freetype fontconfig libjpeg-turbo \
     && dnf clean all
 RUN dnf install -y alsa-lib libusbx systemd-libs gnutls mesa-libGL mesa-libGLU \
         mesa-dri-drivers pulseaudio-libs ncurses-libs krb5-libs || true
-RUN pip3 install --no-cache-dir websockify websockets python-xlib
+COPY requirements.txt /tmp/capsule-requirements.txt
+RUN python3.11 -m pip install --no-cache-dir --only-binary=:all: --require-hashes \
+        -r /tmp/capsule-requirements.txt \
+    && rm -f /tmp/capsule-requirements.txt
 
-# ---- ffmpeg with libopus (Lever 2: Opus audio = ~13-15x less egress than PCM) ----
-# AL2023 has no ffmpeg package; the BtbN linuxarm64-gpl static build ships ffmpeg
-# WITH libopus (--enable-libopus). audio_ws.py pipes parec -> ffmpeg(libopus/ogg).
-# Confirm the encoder exists at BUILD time so a broken fetch fails the build.
+# Pinned ffmpeg build with libopus.
 RUN set -e; \
-    if dnf install -y ffmpeg >/dev/null 2>&1 && command -v ffmpeg >/dev/null 2>&1; then \
-        echo "[build] ffmpeg from dnf"; \
-    else \
-        echo "[build] dnf lacks ffmpeg -> BtbN static aarch64 (has libopus)"; \
-        cd /tmp; \
-        curl -fsSL --retry 3 --max-time 240 -o btbn.tar.xz \
-          "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linuxarm64-gpl.tar.xz"; \
-        mkdir -p /opt/ff && tar -xJf btbn.tar.xz -C /opt/ff --strip-components=1; \
-        install -m 0755 /opt/ff/bin/ffmpeg /usr/local/bin/ffmpeg; \
-        rm -rf /tmp/btbn.tar.xz /opt/ff; \
-    fi; \
+    cd /tmp; \
+    curl -fsSL --retry 3 --max-time 240 -o btbn.tar.xz \
+      "https://github.com/BtbN/FFmpeg-Builds/releases/download/${FFMPEG_RELEASE}/${FFMPEG_ASSET}"; \
+    printf '%s  %s\n' "$FFMPEG_SHA256" btbn.tar.xz | sha256sum -c -; \
+    mkdir -p /opt/ff && tar -xJf btbn.tar.xz -C /opt/ff --strip-components=1; \
+    install -m 0755 /opt/ff/bin/ffmpeg /usr/local/bin/ffmpeg; \
+    rm -rf /tmp/btbn.tar.xz /opt/ff; \
     ffmpeg -version | head -1; \
     ffmpeg -hide_banner -encoders 2>/dev/null | grep -q libopus || { echo "FATAL: ffmpeg lacks libopus encoder"; exit 1; }
 
-# Non-root user: runs BOTH PulseAudio (user mode, avoids system-bus issues) AND the
-# game, so they share the PulseAudio user session and the game's audio reaches the sink.
+# Non-root app user shares the PulseAudio session with the game.
 RUN useradd -m -u 1000 app
 
 # noVNC web client.
-RUN curl -fsSL https://github.com/novnc/noVNC/archive/refs/tags/v1.5.0.tar.gz \
-      | tar -xz -C /opt && ln -s /opt/noVNC-1.5.0 /opt/novnc
+RUN set -e; \
+    curl -fsSL --retry 3 -o /tmp/novnc.tgz \
+      "https://github.com/novnc/noVNC/archive/refs/tags/v${NOVNC_VERSION}.tar.gz"; \
+    printf '%s  %s\n' "$NOVNC_SHA256" /tmp/novnc.tgz | sha256sum -c -; \
+    tar -xzf /tmp/novnc.tgz -C /opt; \
+    ln -s "/opt/noVNC-${NOVNC_VERSION}" /opt/novnc; \
+    rm -f /tmp/novnc.tgz
 
-# ---- Native aarch64 Chocolate Doom (SDL2) -- video + AUDIO + input ----
-# A native ARM build runs directly on the CPU with no translation layer, so it renders
-# reliably across the fleet, and SDL2 gives real audio (SDL2_mixer -> PulseAudio) and
-# keyboard input.
-#
-# AL2023 has NO SDL2 in its repos (no EPEL), so the whole SDL2 stack is built from
-# source. The toolchain + X11 headers are available on the base image. REQUIRED devel:
-# X11 + Xext (video) and pulseaudio-libs (audio -> the capsule null-sink). The rest are
-# best-effort X extensions SDL auto-disables.
+# Build SDL2 + Chocolate Doom from source.
 RUN dnf install -y gcc make autoconf automake libtool pkgconfig \
         libX11-devel libXext-devel pulseaudio-libs-devel alsa-lib-devel \
     && dnf clean all
@@ -68,10 +67,10 @@ RUN for p in libXcursor-devel libXi-devel libXrandr-devel libXfixes-devel \
     done; dnf clean all || true
 ENV PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/lib64/pkgconfig
 
-# SDL2 from source: X11 video + PulseAudio/ALSA audio, no GL/Wayland/Vulkan (DOOM
-# is software-rendered, so we skip GL and its mesa-devel deps).
+# SDL2: X11 video, PulseAudio/ALSA audio, no GL/Wayland/Vulkan.
 WORKDIR /tmp/sdl
-RUN curl -fsSL -o sdl.tgz https://github.com/libsdl-org/SDL/releases/download/release-2.30.9/SDL2-2.30.9.tar.gz \
+RUN curl -fsSL --retry 3 -o sdl.tgz "https://github.com/libsdl-org/SDL/releases/download/release-${SDL2_VERSION}/SDL2-${SDL2_VERSION}.tar.gz" \
+    && printf '%s  %s\n' "$SDL2_SHA256" sdl.tgz | sha256sum -c - \
     && tar -xzf sdl.tgz --strip-components=1 \
     && ./configure --disable-video-wayland --disable-video-opengl \
         --disable-video-opengles --disable-video-vulkan \
@@ -81,25 +80,27 @@ RUN curl -fsSL -o sdl.tgz https://github.com/libsdl-org/SDL/releases/download/re
     && rm -rf /tmp/sdl
 WORKDIR /
 
-# SDL2_mixer (digital SFX = WAV chunks from the WAD; music codecs disabled to avoid
-# extra deps) and SDL2_net (a hard chocolate-doom dep), both against our source SDL2.
+# SDL2_mixer and SDL2_net against source SDL2.
 WORKDIR /tmp/mixer
-RUN curl -fsSL -o mixer.tgz https://github.com/libsdl-org/SDL_mixer/releases/download/release-2.8.0/SDL2_mixer-2.8.0.tar.gz \
+RUN curl -fsSL --retry 3 -o mixer.tgz "https://github.com/libsdl-org/SDL_mixer/releases/download/release-${SDL2_MIXER_VERSION}/SDL2_mixer-${SDL2_MIXER_VERSION}.tar.gz" \
+    && printf '%s  %s\n' "$SDL2_MIXER_SHA256" mixer.tgz | sha256sum -c - \
     && tar -xzf mixer.tgz --strip-components=1 \
     && ./configure --disable-music-mod-mikmod --disable-music-midi-fluidsynth \
         --disable-music-ogg --disable-music-flac --disable-music-mp3-mpg123 \
         --disable-music-opus --disable-sdltest \
     && make -j"$(nproc)" && make install && ldconfig && rm -rf /tmp/mixer
 WORKDIR /tmp/net
-RUN curl -fsSL -o net.tgz https://github.com/libsdl-org/SDL_net/releases/download/release-2.2.0/SDL2_net-2.2.0.tar.gz \
+RUN curl -fsSL --retry 3 -o net.tgz "https://github.com/libsdl-org/SDL_net/releases/download/release-${SDL2_NET_VERSION}/SDL2_net-${SDL2_NET_VERSION}.tar.gz" \
+    && printf '%s  %s\n' "$SDL2_NET_SHA256" net.tgz | sha256sum -c - \
     && tar -xzf net.tgz --strip-components=1 \
     && ./configure --disable-sdltest && make -j"$(nproc)" && make install && ldconfig \
     && rm -rf /tmp/net
 WORKDIR /
 
-# Chocolate Doom against the source SDL2 stack (pkg-config finds it via PKG_CONFIG_PATH).
+# Chocolate Doom.
 WORKDIR /tmp/cdoom
-RUN curl -fsSL -o cdoom.tgz https://github.com/chocolate-doom/chocolate-doom/archive/refs/tags/chocolate-doom-3.0.1.tar.gz \
+RUN curl -fsSL --retry 3 -o cdoom.tgz "https://github.com/chocolate-doom/chocolate-doom/archive/refs/tags/chocolate-doom-${CHOCOLATE_DOOM_VERSION}.tar.gz" \
+    && printf '%s  %s\n' "$CHOCOLATE_DOOM_SHA256" cdoom.tgz | sha256sum -c - \
     && tar -xzf cdoom.tgz --strip-components=1 \
     && ./autogen.sh \
     && ./configure --disable-sdltest CFLAGS="-O2 -fcommon" \
@@ -109,18 +110,14 @@ RUN curl -fsSL -o cdoom.tgz https://github.com/chocolate-doom/chocolate-doom/arc
     && rm -rf /tmp/cdoom
 WORKDIR /
 
-# ---- The IWAD: fetch the freely-redistributable shareware DOOM1.WAD at build time ----
-# This is the game data Chocolate Doom loads (-iwad). It is fetched here, never committed
-# to the repo, so `doom build` is self-serve. capsule/app/ is also COPYed in first, so you
-# can drop your own IWAD/PWADs there to override or extend (run_app.sh loads the first
-# *.wad it finds under /home/app/app). The size + IWAD magic are checked so a bad fetch
-# fails the build loudly instead of shipping a broken image.
+# Stage app WADs, or fetch shareware DOOM1.WAD.
 COPY app/ /home/app/app/
 RUN set -e; \
     if ! ls /home/app/app/*.wad /home/app/app/*.WAD >/dev/null 2>&1; then \
         echo "[build] fetching shareware DOOM1.WAD"; \
         curl -fsSL --retry 3 -o /home/app/app/DOOM1.WAD \
-          https://raw.githubusercontent.com/nneonneo/universal-doom/main/DOOM1.WAD; \
+          "https://raw.githubusercontent.com/nneonneo/universal-doom/${DOOM1_WAD_COMMIT}/DOOM1.WAD"; \
+        printf '%s  %s\n' "$DOOM1_WAD_SHA256" /home/app/app/DOOM1.WAD | sha256sum -c -; \
     fi; \
     wad="$(ls /home/app/app/*.wad /home/app/app/*.WAD 2>/dev/null | head -1)"; \
     [ -n "$wad" ] || { echo "FATAL: no IWAD present"; exit 1; }; \
@@ -129,10 +126,10 @@ RUN set -e; \
     chown -R app:app /home/app/app; \
     echo "== staged app files =="; ls -l /home/app/app
 
-# Combined page served by websockify at / (noVNC iframe + Web Audio player).
+# Browser page.
 COPY index.html /opt/novnc/index.html
 
-# Supervisor + app runner + audio server (rootfs overlay -> /opt/capsule/...).
+# Runtime scripts.
 COPY rootfs/ /
 RUN chmod +x /opt/capsule/start.sh /opt/capsule/run_app.sh
 

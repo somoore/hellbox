@@ -1,23 +1,4 @@
-//! Fork B — local loopback reverse-proxy (feature `proxy`, on by default).
-//!
-//! Browsers cannot set the `X-aws-proxy-auth` header on `WebSocket`/navigation,
-//! and the MicroVM endpoint returns 403 unless that header (plus
-//! `X-aws-proxy-port`) is present (the JWE in a query string is rejected). So
-//! `shrink open` runs this tiny `127.0.0.1` proxy: the browser talks plain
-//! `http://127.0.0.1:<port>`, and we inject the auth/port headers and forward to
-//! the MicroVM over TLS — both for plain HTTP and for WebSocket (WSS) upgrades
-//! (KasmVNC's pixel stream).
-//!
-//! Design:
-//!   * HTTP: a `hyper` 1.x server on loopback. For each request we rebuild it as
-//!     an HTTPS request to the upstream, drop hop-by-hop headers, add the two
-//!     auth headers, and `reqwest`-forward it; the response is streamed back.
-//!   * WebSocket: detect `Upgrade: websocket`. We open the upstream `wss://`
-//!     socket with `tokio-tungstenite` (custom handshake request carrying the
-//!     auth/port headers + any `Sec-WebSocket-Protocol`), answer the browser's
-//!     handshake ourselves, take over the browser connection via
-//!     `hyper::upgrade::on`, and pump frames in both directions until either
-//!     side closes.
+//! Loopback proxy that adds MicroVM auth headers for browser HTTP/WS traffic.
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -41,33 +22,27 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
 use tokio_tungstenite::tungstenite::protocol::Role;
 
-use crate::poll::{PollOpts, poll_until};
+use crate::lifecycle::{host_of, microvm_endpoint, microvm_state, poll_microvm_state};
+use crate::poll::PollOpts;
 use crate::state::State;
 
-/// The map key the auth JWE is delivered under (SDK contract; also the header name).
 const AUTH_TOKEN_KEY: &str = "X-aws-proxy-auth";
-/// Re-minted token validity on resume (minutes; AWS caps at 60).
 const TOKEN_TTL_MINUTES: i32 = 30;
+const CONTROL_COOKIE_NAME: &str = "ldoom_control";
+const CONTROL_COOKIE_PREFIX: &str = "ldoom_control=";
 
-/// The two headers the MicroVM endpoint requires (verified live: missing → 403).
-/// Used by the tests below to assert injection; the proxy itself writes the
-/// lower-cased static names directly.
 #[cfg(test)]
 const AUTH_HEADER: &str = "x-aws-proxy-auth";
 #[cfg(test)]
 const PORT_HEADER: &str = "x-aws-proxy-port";
 
-/// Live count of active WebSocket sessions (the "is a viewer connected?" signal).
-/// A browser tab holds the display WS (and the audio WS once enabled); when the tab
-/// closes, both pumps end and the count returns to 0. `shrink open`'s idle monitor
-/// (Lever 4) watches this to auto-suspend the MicroVM after an idle window.
+/// Live WebSocket sessions for idle detection.
 #[derive(Default)]
 pub struct ProxyActivity {
     sessions: AtomicUsize,
 }
 
 impl ProxyActivity {
-    /// Number of WebSocket sessions currently being pumped.
     pub fn active(&self) -> usize {
         self.sessions.load(Ordering::Relaxed)
     }
@@ -79,11 +54,7 @@ impl ProxyActivity {
     }
 }
 
-/// Live, mutable upstream connection params. Both the endpoint host and the auth
-/// JWE can change across a suspend/resume (the endpoint may move; the token has a
-/// ≤60-min TTL), so they live behind shared locks the forwarding path reads on
-/// every request and the control handler rewrites on resume. Never locked across
-/// an `.await`.
+/// Upstream host/token, both mutable after resume.
 #[derive(Clone)]
 pub struct Upstream {
     host: Arc<RwLock<String>>,
@@ -91,7 +62,6 @@ pub struct Upstream {
 }
 
 impl Upstream {
-    /// New shared upstream from an initial endpoint host + auth JWE.
     pub fn new(host: String, auth_token: String) -> Self {
         Self {
             host: Arc::new(RwLock::new(host)),
@@ -104,64 +74,44 @@ impl Upstream {
     fn token(&self) -> String {
         self.auth_token.read().expect("upstream token lock").clone()
     }
-    /// Swap in a fresh endpoint + token after a resume (host may move, token expires).
     fn set(&self, host: String, auth_token: String) {
         *self.host.write().expect("upstream host lock") = host;
         *self.auth_token.write().expect("upstream token lock") = auth_token;
     }
 }
 
-/// What the proxy needs to drive suspend/resume for the browser buttons. Present
-/// only when `shrink open` wires it; tests/headless leave it `None` (no control
-/// endpoints, no injected panel).
+/// Control-plane state for the injected browser buttons.
 pub struct ProxyControl {
-    /// Control-plane client (SigV4) — works even while the VM is frozen.
     pub microvm: MicrovmClient,
     pub microvm_id: String,
-    /// Capsule name, for `state.json` bookkeeping.
     pub name: String,
-    /// Ports the re-minted auth token must allow (display/audio/video/input).
     pub token_ports: Vec<i32>,
-    /// Shared upstream cells to rewrite (host + token) after a resume.
     pub upstream: Upstream,
+    pub control_secret: String,
 }
 
-/// Everything the proxy needs to reach the capsule.
+/// Proxy routing and control config.
 #[derive(Clone)]
 pub struct ProxyConfig {
-    /// Live upstream host + auth token (both mutable across resume).
     pub upstream: Upstream,
-    /// Default capsule port carried via `X-aws-proxy-port` (the display port).
     pub upstream_port: i32,
-    /// Local loopback port to bind (0 = ephemeral).
     pub local_port: u16,
-    /// Path-prefix → internal capsule port routing table. Requests whose path
-    /// starts with a prefix are routed to that port via `X-aws-proxy-port` (first
-    /// match wins); anything unmatched falls back to `upstream_port`.
-    /// (e.g. `[("/shrinkaudio", 6902), ("/shrinkvideo", 6903), ("/shrinkinput", 6904)]`.)
     pub routes: Vec<(String, i32)>,
-    /// Shared live-session counter for the idle monitor. `None` disables
-    /// activity tracking.
     pub activity: Option<Arc<ProxyActivity>>,
-    /// Suspend/resume control wiring for the browser buttons. `None` = disabled.
     pub control: Option<Arc<ProxyControl>>,
 }
 
 impl ProxyConfig {
-    /// The internal capsule port for a given request path. Returns the port of the
-    /// first route whose prefix the path starts with, else `upstream_port`.
     fn port_for(&self, path: &str) -> i32 {
-        for (prefix, port) in &self.routes {
-            if !prefix.is_empty() && path.starts_with(prefix.as_str()) {
-                return *port;
-            }
-        }
-        self.upstream_port
+        self.routes
+            .iter()
+            .find_map(|(prefix, port)| {
+                (!prefix.is_empty() && path.starts_with(prefix)).then_some(*port)
+            })
+            .unwrap_or(self.upstream_port)
     }
 }
 
-/// Bind the loopback listener, spawn the accept loop, and return the
-/// `http://127.0.0.1:<port>` URL the caller should open.
 pub async fn start(cfg: ProxyConfig) -> Result<String> {
     let addr: SocketAddr = ([127, 0, 0, 1], cfg.local_port).into();
     let listener = TcpListener::bind(addr)
@@ -170,14 +120,13 @@ pub async fn start(cfg: ProxyConfig) -> Result<String> {
     let local = listener.local_addr()?;
     let url = format!("http://{local}");
 
-    // ponytail: a single shared reqwest client (rustls) for all forwarded HTTP.
     let client = reqwest::Client::builder()
         .build()
         .context("building forward HTTP client")?;
     let cfg = Arc::new(cfg);
 
     tracing::info!(
-        target: "shrink::proxy",
+        target: "ldoom::proxy",
         "Fork B loopback proxy on {local} -> https://{} (port {}, header-injecting)",
         cfg.upstream.host(), cfg.upstream_port
     );
@@ -187,23 +136,22 @@ pub async fn start(cfg: ProxyConfig) -> Result<String> {
             let (stream, peer) = match listener.accept().await {
                 Ok(v) => v,
                 Err(e) => {
-                    tracing::warn!(target: "shrink::proxy", "accept failed: {e:#}");
+                    tracing::warn!(target: "ldoom::proxy", "accept failed: {e:#}");
                     break;
                 }
             };
-            tracing::debug!(target: "shrink::proxy", "accepted {peer}");
+            tracing::debug!(target: "ldoom::proxy", "accepted {peer}");
             let cfg = cfg.clone();
             let client = client.clone();
             tokio::spawn(async move {
                 let io = TokioIo::new(stream);
                 let svc = service_fn(move |req| handle(req, cfg.clone(), client.clone()));
                 if let Err(e) = hyper::server::conn::http1::Builder::new()
-                    // with_upgrades: needed so `hyper::upgrade::on` works for WS.
                     .serve_connection(io, svc)
                     .with_upgrades()
                     .await
                 {
-                    tracing::debug!(target: "shrink::proxy", "connection closed: {e:#}");
+                    tracing::debug!(target: "ldoom::proxy", "connection closed: {e:#}");
                 }
             });
         }
@@ -212,23 +160,22 @@ pub async fn start(cfg: ProxyConfig) -> Result<String> {
     Ok(url)
 }
 
-/// Route each request to the WebSocket or plain-HTTP path.
 async fn handle(
     req: Request<Incoming>,
     cfg: Arc<ProxyConfig>,
     client: reqwest::Client,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
-    let result = if req.uri().path().starts_with("/__shrink/") {
-        // Local control plane (suspend/resume/state) — never forwarded upstream, so
-        // it answers even while the capsule is frozen.
+    let result = if control_action(req.uri().path()).is_some() {
         handle_control(req, cfg).await
+    } else if let Some(reject) = data_plane_rejection(&req, &cfg) {
+        Ok(reject)
     } else if is_websocket_upgrade(req.headers()) {
         handle_ws(req, cfg).await
     } else {
         handle_http(req, cfg, client).await
     };
     Ok(result.unwrap_or_else(|e| {
-        tracing::warn!(target: "shrink::proxy", "proxy error: {e:#}");
+        tracing::warn!(target: "ldoom::proxy", "proxy error: {e:#}");
         Response::builder()
             .status(StatusCode::BAD_GATEWAY)
             .body(Full::new(Bytes::from_static(b"proxy error")))
@@ -236,8 +183,6 @@ async fn handle(
     }))
 }
 
-/// Plain HTTP: rebuild the request against the upstream with the auth headers and
-/// forward it via reqwest, streaming the response back.
 async fn handle_http(
     req: Request<Incoming>,
     cfg: Arc<ProxyConfig>,
@@ -258,23 +203,19 @@ async fn handle_http(
     let method = reqwest::Method::from_bytes(parts.method.as_str().as_bytes()).context("method")?;
     let port = cfg.port_for(parts.uri.path());
     let token = cfg.upstream.token();
-    // A root navigation while SUSPENDED would silently auto-resume the VM — AWS thaws a
-    // suspended MicroVM on ANY data-plane hit to its endpoint, so merely forwarding a
-    // refresh restarts billing. Check state via the CONTROL plane first (that does NOT
-    // resume) and serve the local Resume page instead of forwarding, so a refresh keeps
-    // the capsule paused until the user explicitly clicks Resume. (If the state call
-    // fails, fall through and forward as before.)
+    // Avoid data-plane auto-resume on page refresh while suspended.
     if is_root
         && is_get
         && let Some(ctrl) = &cfg.control
         && let Ok(state) = current_state(ctrl).await
         && state != "RUNNING"
     {
-        return Ok(html_response(control_only_page()));
+        return Ok(html_response_with_control_secret(
+            control_only_page(),
+            &ctrl.control_secret,
+        ));
     }
-    // Force the root page through as a full 200 so we can inject the panel: a
-    // conditional request would let the capsule answer 304 (no body), and the browser
-    // would reuse a stale, un-injected cached copy.
+    // Avoid 304s so panel injection has a body.
     if is_root && is_get && cfg.control.is_some() {
         parts.headers.remove(hyper::header::IF_NONE_MATCH);
         parts.headers.remove(hyper::header::IF_MODIFIED_SINCE);
@@ -296,21 +237,31 @@ async fn handle_http(
     {
         Ok(r) => r,
         Err(e) => {
-            // Upstream unreachable — usually because the capsule is suspended. For a
-            // root-page navigation, serve the local control page (with a Resume button)
-            // instead of a bare 502, so a reload-while-frozen can still thaw it.
-            if is_root && is_get && cfg.control.is_some() {
-                return Ok(html_response(control_only_page()));
+            // Suspended/unreachable root: serve the local Resume page.
+            if is_root
+                && is_get
+                && let Some(ctrl) = &cfg.control
+            {
+                return Ok(html_response_with_control_secret(
+                    control_only_page(),
+                    &ctrl.control_secret,
+                ));
             }
             return Err(e).with_context(|| format!("forwarding to {upstream}"));
         }
     };
 
     let status = resp.status();
-    // Capsule not actually serving the page (suspended → platform 5xx, terminated, etc.)
-    // on a root navigation: show the local control page (Resume) instead of a raw error.
-    if is_root && is_get && cfg.control.is_some() && status.as_u16() >= 500 {
-        return Ok(html_response(control_only_page()));
+    // Suspended/failed root: keep the Resume UI reachable.
+    if is_root
+        && is_get
+        && let Some(ctrl) = &cfg.control
+        && status.as_u16() >= 500
+    {
+        return Ok(html_response_with_control_secret(
+            control_only_page(),
+            &ctrl.control_secret,
+        ));
     }
     let upstream_headers = resp.headers().clone();
     let is_html = upstream_headers
@@ -320,8 +271,7 @@ async fn handle_http(
         .unwrap_or(false);
     let bytes = resp.bytes().await.context("reading upstream body")?;
 
-    // Inject the suspend/resume control panel into the page HTML — so the baked image
-    // never needs rebuilding to gain the buttons, and any capsule gets them for free.
+    // Add controls without rebuilding the capsule image.
     let injected = is_root && is_get && is_html && cfg.control.is_some();
     let bytes = if injected {
         inject_panel(&bytes)
@@ -338,13 +288,10 @@ async fn handle_http(
         if is_hop_by_hop(n) {
             continue;
         }
-        // Drop upstream Content-Length: injection changes the body size, and hyper
-        // derives the correct length from the `Full<Bytes>` body either way.
         if n.eq_ignore_ascii_case("content-length") {
             continue;
         }
-        // For the injected page, drop cache validators/policy so the browser never
-        // reuses an un-injected copy or 304s us on the next load.
+        // Do not cache the injected page.
         if injected
             && (n.eq_ignore_ascii_case("etag")
                 || n.eq_ignore_ascii_case("last-modified")
@@ -365,14 +312,20 @@ async fn handle_http(
             hyper::header::CACHE_CONTROL,
             HeaderValue::from_static("no-store"),
         );
+        if let Some(ctrl) = &cfg.control {
+            let cookie = format!(
+                "ldoom_control={}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400",
+                ctrl.control_secret
+            );
+            if let Ok(v) = HeaderValue::from_str(&cookie) {
+                out.insert(hyper::header::SET_COOKIE, v);
+            }
+        }
     }
     Ok(response)
 }
 
-/// WebSocket: answer the browser handshake locally, dial the upstream `wss://`
-/// with the auth headers, and pump frames both ways after both upgrades land.
 async fn handle_ws(req: Request<Incoming>, cfg: Arc<ProxyConfig>) -> Result<Response<Full<Bytes>>> {
-    // The browser's handshake key → the Sec-WebSocket-Accept we must echo.
     let key = req
         .headers()
         .get("Sec-WebSocket-Key")
@@ -388,7 +341,6 @@ async fn handle_ws(req: Request<Incoming>, cfg: Arc<ProxyConfig>) -> Result<Resp
         .unwrap_or("/")
         .to_string();
 
-    // Build the upstream WSS handshake request with the auth/port headers.
     let upstream = format!("wss://{}{}", cfg.upstream.host(), path);
     let mut up_req = upstream
         .clone()
@@ -409,13 +361,11 @@ async fn handle_ws(req: Request<Incoming>, cfg: Arc<ProxyConfig>) -> Result<Resp
         }
     }
 
-    // Dial the upstream first; if it fails, fail the browser handshake.
     let (upstream_ws, _resp) = tokio_tungstenite::connect_async(up_req)
         .await
         .with_context(|| format!("connecting upstream WSS {upstream}"))?;
 
-    // Take over the browser connection once hyper finishes the 101. Count this as a
-    // live session for the whole duration of the pump (Lever 4 idle detection).
+    // Count the pump as one live session.
     let on_upgrade = hyper::upgrade::on(req);
     let activity = cfg.activity.clone();
     if let Some(a) = &activity {
@@ -432,14 +382,13 @@ async fn handle_ws(req: Request<Incoming>, cfg: Arc<ProxyConfig>) -> Result<Resp
                 .await;
                 pump(browser_ws, upstream_ws).await;
             }
-            Err(e) => tracing::warn!(target: "shrink::proxy", "browser upgrade failed: {e:#}"),
+            Err(e) => tracing::warn!(target: "ldoom::proxy", "browser upgrade failed: {e:#}"),
         }
         if let Some(a) = &activity {
             a.leave();
         }
     });
 
-    // 101 Switching Protocols back to the browser.
     let mut resp = Response::builder()
         .status(StatusCode::SWITCHING_PROTOCOLS)
         .header("Connection", "Upgrade")
@@ -455,7 +404,6 @@ async fn handle_ws(req: Request<Incoming>, cfg: Arc<ProxyConfig>) -> Result<Resp
         .context("building 101 response")
 }
 
-/// Copy WS frames between the browser and upstream sockets until either closes.
 async fn pump<B, U>(browser: B, upstream: U)
 where
     B: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
@@ -499,10 +447,9 @@ where
         _ = b2u => {}
         _ = u2b => {}
     }
-    tracing::debug!(target: "shrink::proxy", "WS session closed");
+    tracing::debug!(target: "ldoom::proxy", "WS session closed");
 }
 
-/// True if the request is a WebSocket upgrade.
 fn is_websocket_upgrade(headers: &HeaderMap) -> bool {
     let has_upgrade = headers
         .get(hyper::header::CONNECTION)
@@ -517,8 +464,6 @@ fn is_websocket_upgrade(headers: &HeaderMap) -> bool {
     has_upgrade && is_ws
 }
 
-/// Copy the inbound headers minus hop-by-hop/host, and add the two auth headers.
-/// Extracted so the rewrite is unit-testable without a live socket.
 fn build_upstream_headers(
     inbound: &HeaderMap,
     auth_token: &str,
@@ -527,8 +472,16 @@ fn build_upstream_headers(
     let mut out = reqwest::header::HeaderMap::new();
     for (name, value) in inbound.iter() {
         let n = name.as_str();
-        // Drop hop-by-hop and host (reqwest sets Host from the upstream URL).
         if is_hop_by_hop(n) || n.eq_ignore_ascii_case("host") {
+            continue;
+        }
+        if n.eq_ignore_ascii_case("cookie") {
+            if let Ok(cookie) = value.to_str()
+                && let Some(filtered) = strip_control_cookie(cookie)
+                && let Ok(hv) = reqwest::header::HeaderValue::from_str(&filtered)
+            {
+                out.append(reqwest::header::COOKIE, hv);
+            }
             continue;
         }
         if let (Ok(hn), Ok(hv)) = (
@@ -538,7 +491,6 @@ fn build_upstream_headers(
             out.append(hn, hv);
         }
     }
-    // The two headers that make auth work (verified live).
     if let Ok(v) = reqwest::header::HeaderValue::from_str(auth_token) {
         out.insert(
             reqwest::header::HeaderName::from_static("x-aws-proxy-auth"),
@@ -554,7 +506,6 @@ fn build_upstream_headers(
     out
 }
 
-/// RFC 7230 §6.1 hop-by-hop headers — must not be forwarded end-to-end.
 fn is_hop_by_hop(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().as_str(),
@@ -569,38 +520,125 @@ fn is_hop_by_hop(name: &str) -> bool {
     )
 }
 
-/// True if a `Host` or `Origin` authority points at loopback. Locks the `/__shrink/*`
-/// control endpoints to our own served page: a DNS-rebound or cross-origin attacker
-/// carries its own hostname/origin in these headers, not `127.0.0.1`. Accepts the
-/// `Origin` form (`http://127.0.0.1:6080`) and the `Host` form (`127.0.0.1:6080`,
-/// `localhost`, `[::1]:6080`). A suffix trick like `127.0.0.1.evil.com` is rejected
-/// (the whole label must equal a loopback name).
+/// Accept only loopback Host/Origin authority.
 fn is_loopback_authority(value: &str) -> bool {
     let v = value.trim();
     let v = v
         .strip_prefix("http://")
         .or_else(|| v.strip_prefix("https://"))
         .unwrap_or(v);
-    let v = v.split('/').next().unwrap_or(v); // drop any path the Origin shouldn't have
+    let v = v.split('/').next().unwrap_or(v);
     let host = if let Some(rest) = v.strip_prefix('[') {
-        rest.split(']').next().unwrap_or(rest) // [::1]:port -> ::1
+        rest.split(']').next().unwrap_or(rest)
     } else {
-        v.rsplit_once(':').map(|(h, _)| h).unwrap_or(v) // host:port -> host
+        v.rsplit_once(':').map(|(h, _)| h).unwrap_or(v)
     };
     matches!(host, "127.0.0.1" | "localhost" | "::1")
 }
 
-// `IntoClientRequest` is needed for `.into_client_request()` above.
+fn loopback_metadata_ok(headers: &HeaderMap) -> bool {
+    let host_ok = headers
+        .get(hyper::header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(is_loopback_authority)
+        .unwrap_or(false);
+    let origin_ok = match headers
+        .get(hyper::header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+    {
+        Some(o) => is_loopback_authority(o),
+        None => true,
+    };
+    host_ok && origin_ok
+}
+
+fn has_local_session(headers: &HeaderMap, secret: &str) -> bool {
+    headers
+        .get(hyper::header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .map(|cookie| cookie_has_control_secret(cookie, secret))
+        .unwrap_or(false)
+}
+
+fn allowed_initial_navigation(req: &Request<Incoming>) -> bool {
+    if req.method() != hyper::Method::GET || req.uri().path() != "/" {
+        return false;
+    }
+    match req
+        .headers()
+        .get("sec-fetch-site")
+        .and_then(|v| v.to_str().ok())
+    {
+        Some("same-origin" | "none") | None => true,
+        Some(_) => false,
+    }
+}
+
+fn expected_forward_path(path: &str) -> bool {
+    path == "/"
+        || path == "/vnc.html"
+        || path == "/websockify"
+        || path == "/favicon.ico"
+        || path.starts_with("/ldoom/audio")
+        || path.starts_with("/ldoom/video")
+        || path.starts_with("/ldoom/input")
+        || path.starts_with("/app/")
+        || path.starts_with("/core/")
+        || path.starts_with("/vendor/")
+        || path.starts_with("/include/")
+        || path.starts_with("/images/")
+        || path.starts_with("/utils/")
+}
+
+fn data_plane_rejection(
+    req: &Request<Incoming>,
+    cfg: &ProxyConfig,
+) -> Option<Response<Full<Bytes>>> {
+    let ctrl = cfg.control.as_ref()?;
+    if !expected_forward_path(req.uri().path()) {
+        return Some(json_response(
+            StatusCode::FORBIDDEN,
+            r#"{"error":"unexpected local proxy path"}"#.to_string(),
+        ));
+    }
+    if !loopback_metadata_ok(req.headers()) {
+        return Some(json_response(
+            StatusCode::FORBIDDEN,
+            r#"{"error":"data-plane proxy is loopback-only"}"#.to_string(),
+        ));
+    }
+    if allowed_initial_navigation(req) || has_local_session(req.headers(), &ctrl.control_secret) {
+        return None;
+    }
+    Some(json_response(
+        StatusCode::FORBIDDEN,
+        r#"{"error":"missing local session secret"}"#.to_string(),
+    ))
+}
+
+fn strip_control_cookie(cookie: &str) -> Option<String> {
+    let kept: Vec<&str> = cookie
+        .split(';')
+        .map(str::trim)
+        .filter(|part| {
+            !part
+                .strip_prefix(CONTROL_COOKIE_NAME)
+                .map(|rest| rest.starts_with('='))
+                .unwrap_or(false)
+                && !part.is_empty()
+        })
+        .collect();
+    if kept.is_empty() {
+        None
+    } else {
+        Some(kept.join("; "))
+    }
+}
+
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
-// ----------------------------------------------------------------------------
-// Browser control plane: suspend / resume / state + the injected UI panel.
-// Suspend/resume are CONTROL-plane calls (SigV4), so they work even while the
-// capsule is frozen and unreachable through the data path. Resume re-mints the
-// auth JWE and refreshes the (possibly moved) endpoint so the page reconnects.
-// ----------------------------------------------------------------------------
+// Browser control plane: state, suspend, resume, injected UI.
 
-/// Wrap an HTML body in a `text/html` response.
 fn html_response(body: String) -> Response<Full<Bytes>> {
     let mut resp = Response::new(Full::new(Bytes::from(body)));
     resp.headers_mut().insert(
@@ -610,7 +648,16 @@ fn html_response(body: String) -> Response<Full<Bytes>> {
     resp
 }
 
-/// Wrap a JSON body in a response with the given status.
+fn html_response_with_control_secret(body: String, secret: &str) -> Response<Full<Bytes>> {
+    let mut resp = html_response(body);
+    let cookie =
+        format!("ldoom_control={secret}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400");
+    if let Ok(v) = HeaderValue::from_str(&cookie) {
+        resp.headers_mut().insert(hyper::header::SET_COOKIE, v);
+    }
+    resp
+}
+
 fn json_response(status: StatusCode, body: String) -> Response<Full<Bytes>> {
     let mut resp = Response::new(Full::new(Bytes::from(body)));
     *resp.status_mut() = status;
@@ -621,10 +668,6 @@ fn json_response(status: StatusCode, body: String) -> Response<Full<Bytes>> {
     resp
 }
 
-/// Handle the local `/__shrink/*` control endpoints (never forwarded upstream):
-///   GET  /__shrink/state    → {"state":"RUNNING"|"SUSPENDED"|…}
-///   POST /__shrink/suspend  → suspend + poll SUSPENDED → {"state":…}
-///   POST /__shrink/resume   → resume + poll RUNNING, re-mint token + refresh endpoint
 async fn handle_control(
     req: Request<Incoming>,
     cfg: Arc<ProxyConfig>,
@@ -638,48 +681,27 @@ async fn handle_control(
             ));
         }
     };
-    // --- CSRF / DNS-rebinding guard ---------------------------------------------------
-    // These endpoints drive the AWS control plane with the user's creds, so they must be
-    // reachable ONLY from our own loopback-served page, never from another site or a
-    // DNS-rebound page. The proxy binds 127.0.0.1, but the browser will still forward a
-    // cross-origin `fetch` (CORS blocks reading the reply, not sending the request), and a
-    // rebound page makes the request "same-origin". We defend on the request metadata the
-    // browser sets honestly:
-    //   * Host must be loopback — a rebound/foreign page carries its own hostname here.
-    //   * Origin, if present, must be our loopback origin — a cross-origin fetch carries
-    //     the attacker's Origin; our own page sends ours (or none for a same-origin GET).
-    let host_ok = req
-        .headers()
-        .get(hyper::header::HOST)
-        .and_then(|v| v.to_str().ok())
-        .map(is_loopback_authority)
-        .unwrap_or(false);
-    let origin_ok = match req
-        .headers()
-        .get(hyper::header::ORIGIN)
-        .and_then(|v| v.to_str().ok())
-    {
-        Some(o) => is_loopback_authority(o),
-        None => true,
-    };
-    if !host_ok || !origin_ok {
-        tracing::warn!(target: "shrink::proxy", "rejected control request (host_ok={host_ok} origin_ok={origin_ok})");
+    // Local control calls use the user's AWS creds; require loopback metadata.
+    if !loopback_metadata_ok(req.headers()) {
+        tracing::warn!(target: "ldoom::proxy", "rejected control request (non-loopback Host or Origin)");
         return Ok(json_response(
             StatusCode::FORBIDDEN,
             r#"{"error":"control endpoints are loopback-only"}"#.to_string(),
         ));
     }
 
-    let method = req.method().clone();
-    let action = req
-        .uri()
-        .path()
-        .trim_start_matches("/__shrink/")
-        .to_string();
+    if !has_local_session(req.headers(), &ctrl.control_secret) {
+        tracing::warn!(target: "ldoom::proxy", "rejected control request (missing/invalid local session secret)");
+        return Ok(json_response(
+            StatusCode::FORBIDDEN,
+            r#"{"error":"missing local session secret"}"#.to_string(),
+        ));
+    }
 
-    // Mutating actions require POST: a cross-origin `<img>`/simple GET sends no Origin and
-    // a loopback Host, so the checks above would pass it; requiring POST blocks it (a real
-    // cross-origin POST always carries an Origin and is rejected above).
+    let method = req.method().clone();
+    let action = control_action(req.uri().path()).unwrap_or_default();
+
+    // Keep mutating actions off simple GETs.
     if matches!(action.as_str(), "suspend" | "resume") && method != hyper::Method::POST {
         return Ok(json_response(
             StatusCode::METHOD_NOT_ALLOWED,
@@ -705,7 +727,7 @@ async fn handle_control(
             format!(r#"{{"state":{}}}"#, json_str(&state)),
         ),
         Err(e) => {
-            tracing::warn!(target: "shrink::proxy", "control {action} failed: {e:#}");
+            tracing::warn!(target: "ldoom::proxy", "control {action} failed: {e:#}");
             json_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!(r#"{{"error":{}}}"#, json_str(&format!("{e:#}"))),
@@ -714,21 +736,12 @@ async fn handle_control(
     })
 }
 
-/// GetMicrovm → current state string.
 async fn current_state(ctrl: &ProxyControl) -> Result<String> {
-    let out = ctrl
-        .microvm
-        .get_microvm()
-        .microvm_identifier(&ctrl.microvm_id)
-        .send()
-        .await
-        .context("get_microvm")?;
-    Ok(out.state().as_str().to_string())
+    microvm_state(&ctrl.microvm, &ctrl.microvm_id).await
 }
 
-/// Suspend the MicroVM and poll until SUSPENDED; record it in state.json.
 async fn do_suspend(ctrl: &ProxyControl) -> Result<String> {
-    tracing::info!(target: "shrink::proxy", "browser requested suspend of {}", ctrl.microvm_id);
+    tracing::info!(target: "ldoom::proxy", "browser requested suspend of {}", ctrl.microvm_id);
     ctrl.microvm
         .suspend_microvm()
         .microvm_identifier(&ctrl.microvm_id)
@@ -740,10 +753,8 @@ async fn do_suspend(ctrl: &ProxyControl) -> Result<String> {
     Ok(state)
 }
 
-/// Resume the MicroVM, poll to RUNNING, then refresh the endpoint and re-mint the
-/// auth token so the reloaded page can reconnect (old endpoint/token may be stale).
 async fn do_resume(ctrl: &ProxyControl) -> Result<String> {
-    tracing::info!(target: "shrink::proxy", "browser requested resume of {}", ctrl.microvm_id);
+    tracing::info!(target: "ldoom::proxy", "browser requested resume of {}", ctrl.microvm_id);
     ctrl.microvm
         .resume_microvm()
         .microvm_identifier(&ctrl.microvm_id)
@@ -752,25 +763,17 @@ async fn do_resume(ctrl: &ProxyControl) -> Result<String> {
         .context("resume_microvm")?;
     let state = poll_state(ctrl, &["RUNNING", "TERMINATED", "FAILED"]).await?;
     if state == "RUNNING" {
-        let out = ctrl
-            .microvm
-            .get_microvm()
-            .microvm_identifier(&ctrl.microvm_id)
-            .send()
-            .await
-            .context("get_microvm (post-resume)")?;
-        let host = host_of(out.endpoint());
+        let host = host_of(&microvm_endpoint(&ctrl.microvm, &ctrl.microvm_id).await?);
         let token = mint_token(ctrl).await?;
         ctrl.upstream.set(host.clone(), token);
         record_endpoint(&ctrl.name, &state, &host);
-        tracing::info!(target: "shrink::proxy", "resumed {} — endpoint+token refreshed", ctrl.microvm_id);
+        tracing::info!(target: "ldoom::proxy", "resumed {} — endpoint+token refreshed", ctrl.microvm_id);
     } else {
         record_state(&ctrl.name, &state);
     }
     Ok(state)
 }
 
-/// Mint a fresh auth JWE allowing the capsule's display/audio/video/input ports.
 async fn mint_token(ctrl: &ProxyControl) -> Result<String> {
     let mut req = ctrl
         .microvm
@@ -787,27 +790,21 @@ async fn mint_token(ctrl: &ProxyControl) -> Result<String> {
         .with_context(|| format!("auth token response missing '{AUTH_TOKEN_KEY}'"))
 }
 
-/// Poll get_microvm until a terminal state (short cadence — suspend/resume are quick).
 async fn poll_state(ctrl: &ProxyControl, terminal: &[&str]) -> Result<String> {
     let opts = PollOpts {
         interval: std::time::Duration::from_secs(2),
         timeout: std::time::Duration::from_secs(180),
     };
     let label = format!("microvm {}", ctrl.name);
-    poll_until(&label, terminal, opts, || async move {
-        current_state(ctrl).await
-    })
-    .await
+    poll_microvm_state(&ctrl.microvm, &label, &ctrl.microvm_id, terminal, opts).await
 }
 
-/// Best-effort: record a new state in state.json.
 fn record_state(name: &str, state: &str) {
     if let Ok(mut st) = State::load() {
         let _ = st.upsert(name, |c| c.state = Some(state.to_string()));
     }
 }
 
-/// Best-effort: record state + refreshed endpoint in state.json.
 fn record_endpoint(name: &str, state: &str, host: &str) {
     if let Ok(mut st) = State::load() {
         let _ = st.upsert(name, |c| {
@@ -817,17 +814,6 @@ fn record_endpoint(name: &str, state: &str, host: &str) {
     }
 }
 
-/// Strip scheme/trailing slash from an endpoint, leaving the bare host the proxy dials.
-fn host_of(endpoint: &str) -> String {
-    endpoint
-        .trim_start_matches("https://")
-        .trim_start_matches("http://")
-        .trim_start_matches("wss://")
-        .trim_end_matches('/')
-        .to_string()
-}
-
-/// Minimal JSON string-escaping for the small values we emit (state, error text).
 fn json_str(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
@@ -846,7 +832,19 @@ fn json_str(s: &str) -> String {
     out
 }
 
-/// Inject the control-panel markup just before `</body>` (or append if absent).
+fn control_action(path: &str) -> Option<String> {
+    path.strip_prefix("/__lambdadoom/").map(str::to_string)
+}
+
+fn cookie_has_control_secret(cookie: &str, secret: &str) -> bool {
+    cookie.split(';').any(|part| {
+        let part = part.trim();
+        part.strip_prefix(CONTROL_COOKIE_PREFIX)
+            .map(|v| v == secret)
+            .unwrap_or(false)
+    })
+}
+
 fn inject_panel(body: &Bytes) -> Bytes {
     match std::str::from_utf8(body) {
         Ok(html) => {
@@ -861,21 +859,14 @@ fn inject_panel(body: &Bytes) -> Bytes {
             };
             Bytes::from(injected)
         }
-        // Non-UTF8 (shouldn't happen for an HTML doc) — pass through unchanged.
         Err(_) => body.clone(),
     }
 }
 
-/// Self-contained local page served by the proxy when the capsule is not serving
-/// the stream (suspended → 5xx, or unreachable). Depends on nothing in the capsule:
-/// it polls `/__shrink/state` and offers Resume/Suspend, so there is always
-/// "something to click" to thaw the session even with no MicroVM running.
 fn control_only_page() -> String {
     CONTROL_ONLY_PAGE.to_string()
 }
 
-/// The standalone control page (see `control_only_page`). Plain `const` — not a
-/// format string — so the `{`/`#` in CSS/JS need no escaping.
 const CONTROL_ONLY_PAGE: &str = r##"<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>LambdaDoom — paused</title>
@@ -936,7 +927,7 @@ function paint(s){
   else{dot.style.background='#888';status.textContent=s||'…';btn.textContent='…';btn.disabled=true;}
 }
 function poll(){if(busy)return;
-  fetch('/__shrink/state').then(function(r){return r.json();})
+  fetch('/__lambdadoom/state').then(function(r){return r.json();})
     .then(function(j){if(j.state)paint(j.state);})
     .catch(function(){status.textContent='proxy offline';dot.style.background='#888';});}
 btn.onclick=function(){
@@ -944,7 +935,7 @@ btn.onclick=function(){
   var act=cur==='RUNNING'?'suspend':cur==='SUSPENDED'?'resume':null;if(!act)return;
   busy=true;btn.disabled=true;dot.style.background='#58a6ff';
   status.textContent=act==='suspend'?'suspending…':'resuming…';
-  fetch('/__shrink/'+act,{method:'POST'}).then(function(r){return r.json();})
+  fetch('/__lambdadoom/'+act,{method:'POST'}).then(function(r){return r.json();})
     .then(function(j){busy=false;
       if(act==='resume'&&j.state==='RUNNING'){status.textContent='resumed · loading…';
         setTimeout(function(){var u=new URL(location.href);u.searchParams.set('resumed','1');location.href=u.toString();},700);return;}
@@ -954,26 +945,24 @@ btn.onclick=function(){
 poll();setInterval(poll,3000);
 </script></body></html>"##;
 
-/// The floating Suspend/Resume control panel injected into the capsule page. Pure
-/// vanilla JS talking to the proxy-local `/__shrink/*` endpoints. (Plain `const` —
-/// not a format string — so the `{`/`#` in the CSS/JS need no escaping.)
+/// Injected Suspend/Resume panel.
 const CONTROL_PANEL: &str = r##"
-<div id="shrink-ctl" style="position:fixed;bottom:16px;right:16px;z-index:2147483647;
+<div id="ldoom-ctl" style="position:fixed;bottom:16px;right:16px;z-index:2147483647;
   font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;color:#ECE8DF;
   background:rgba(9,10,13,.74);border:1px solid #1F232A;border-radius:12px;padding:8px 8px 8px 14px;
   display:flex;gap:12px;align-items:center;box-shadow:0 12px 34px rgba(0,0,0,.5)">
-  <span id="shrink-dot" style="width:8px;height:8px;border-radius:50%;flex-shrink:0;
+  <span id="ldoom-dot" style="width:8px;height:8px;border-radius:50%;flex-shrink:0;
     background:#888;display:inline-block"></span>
-  <span id="shrink-status" style="font-size:13px;font-weight:600;letter-spacing:.01em;white-space:nowrap">…</span>
-  <button id="shrink-btn" style="font-family:inherit;font-size:13px;font-weight:600;
+  <span id="ldoom-status" style="font-size:13px;font-weight:600;letter-spacing:.01em;white-space:nowrap">…</span>
+  <button id="ldoom-btn" style="font-family:inherit;font-size:13px;font-weight:600;
     padding:0 14px;height:34px;cursor:pointer;border-radius:8px;border:1px solid #2C313A;
     background:#15181D;color:#ECE8DF;white-space:nowrap" disabled>…</button>
 </div>
 <script>
 (function(){
-  var dot=document.getElementById('shrink-dot');
-  var st=document.getElementById('shrink-status');
-  var btn=document.getElementById('shrink-btn');
+  var dot=document.getElementById('ldoom-dot');
+  var st=document.getElementById('ldoom-status');
+  var btn=document.getElementById('ldoom-btn');
   var busy=false, cur='';
   function paint(state){
     cur=state;
@@ -986,7 +975,7 @@ const CONTROL_PANEL: &str = r##"
   }
   function poll(){
     if(busy)return;
-    fetch('/__shrink/state').then(function(r){return r.json();})
+    fetch('/__lambdadoom/state').then(function(r){return r.json();})
       .then(function(j){if(j.state)paint(j.state);}).catch(function(){});
   }
   btn.onclick=function(){
@@ -995,7 +984,7 @@ const CONTROL_PANEL: &str = r##"
     if(!act)return;
     busy=true;btn.disabled=true;dot.style.background='#58a6ff';
     st.textContent=act==='suspend'?'Suspending…':'Resuming…';
-    fetch('/__shrink/'+act,{method:'POST'}).then(function(r){return r.json();})
+    fetch('/__lambdadoom/'+act,{method:'POST'}).then(function(r){return r.json();})
       .then(function(j){
         busy=false;
         if(act==='resume'&&j.state==='RUNNING'){
@@ -1024,9 +1013,9 @@ mod tests {
             upstream_port: 6901,
             local_port: 0,
             routes: vec![
-                ("/shrinkaudio".into(), 6902),
-                ("/shrinkvideo".into(), 6903),
-                ("/shrinkinput".into(), 6904),
+                ("/ldoom/audio".into(), 6902),
+                ("/ldoom/video".into(), 6903),
+                ("/ldoom/input".into(), 6904),
             ],
             activity: None,
             control: None,
@@ -1038,9 +1027,8 @@ mod tests {
         let html = Bytes::from("<html><body><h1>hi</h1></body></html>");
         let out = inject_panel(&html);
         let s = std::str::from_utf8(&out).unwrap();
-        assert!(s.contains("shrink-ctl"), "panel markup injected");
-        // Panel sits after the original content and before the closing body tag.
-        let panel_at = s.find("shrink-ctl").unwrap();
+        assert!(s.contains("ldoom-ctl"), "panel markup injected");
+        let panel_at = s.find("ldoom-ctl").unwrap();
         let body_at = s.find("</body>").unwrap();
         let h1_at = s.find("<h1>hi</h1>").unwrap();
         assert!(
@@ -1058,13 +1046,12 @@ mod tests {
             s.starts_with("<div>no body tag</div>"),
             "original content kept"
         );
-        assert!(s.contains("shrink-ctl"), "panel appended when no </body>");
+        assert!(s.contains("ldoom-ctl"), "panel appended when no </body>");
     }
 
     #[test]
     fn injected_panel_drives_control_endpoints() {
-        // The panel must talk to the proxy-local control plane and offer both actions.
-        assert!(CONTROL_PANEL.contains("/__shrink/state"), "polls state");
+        assert!(CONTROL_PANEL.contains("/__lambdadoom/state"), "polls state");
         assert!(CONTROL_PANEL.contains("method:'POST'"), "POSTs the action");
         assert!(CONTROL_PANEL.contains("'Suspend'"), "offers Suspend");
         assert!(CONTROL_PANEL.contains("'Resume'"), "offers Resume");
@@ -1072,11 +1059,9 @@ mod tests {
 
     #[test]
     fn control_only_page_offers_resume() {
-        // The standalone page (served when the capsule is frozen) must stand on its own:
-        // poll state, offer Resume, and reload to reconnect once running.
         let page = control_only_page();
         assert!(page.contains("Resume game"), "has a Resume control");
-        assert!(page.contains("/__shrink/state"), "polls live state");
+        assert!(page.contains("/__lambdadoom/state"), "polls live state");
         assert!(
             page.contains("resumed"),
             "reconnects after resume (reloads with ?resumed=1)"
@@ -1088,6 +1073,65 @@ mod tests {
         assert_eq!(json_str("RUNNING"), "\"RUNNING\"");
         assert_eq!(json_str("a\"b\\c"), "\"a\\\"b\\\\c\"");
         assert_eq!(json_str("line\nbreak"), "\"line\\nbreak\"");
+    }
+
+    #[test]
+    fn control_paths_accept_lambdadoom_namespace() {
+        assert_eq!(control_action("/__lambdadoom/state").unwrap(), "state");
+        assert_eq!(control_action("/__lambdadoom/suspend").unwrap(), "suspend");
+        assert!(control_action("/not-control/state").is_none());
+    }
+
+    #[test]
+    fn control_secret_cookie_must_match() {
+        assert!(cookie_has_control_secret(
+            "foo=bar; ldoom_control=abc123; theme=dark",
+            "abc123"
+        ));
+        assert!(!cookie_has_control_secret("ldoom_control=wrong", "abc123"));
+        assert!(!cookie_has_control_secret("other=abc123", "abc123"));
+    }
+
+    #[test]
+    fn strips_local_control_cookie_before_forwarding() {
+        assert_eq!(
+            strip_control_cookie("foo=bar; ldoom_control=abc123; theme=dark").as_deref(),
+            Some("foo=bar; theme=dark")
+        );
+        assert_eq!(strip_control_cookie("ldoom_control=abc123"), None);
+
+        let mut inbound = HeaderMap::new();
+        inbound.insert(
+            "cookie",
+            HeaderValue::from_static("foo=bar; ldoom_control=abc123"),
+        );
+        let out = build_upstream_headers(&inbound, "the.secret.jwe", 6901);
+        assert_eq!(out.get("cookie").unwrap(), "foo=bar");
+    }
+
+    #[test]
+    fn data_plane_metadata_rejects_foreign_origin() {
+        let mut h = HeaderMap::new();
+        h.insert("host", HeaderValue::from_static("127.0.0.1:6080"));
+        h.insert(
+            "origin",
+            HeaderValue::from_static("https://foreign.example"),
+        );
+        assert!(!loopback_metadata_ok(&h));
+
+        h.insert("origin", HeaderValue::from_static("http://127.0.0.1:6080"));
+        assert!(loopback_metadata_ok(&h));
+    }
+
+    #[test]
+    fn forwarded_paths_are_limited_to_stream_and_novnc_assets() {
+        assert!(expected_forward_path("/"));
+        assert!(expected_forward_path("/ldoom/video"));
+        assert!(expected_forward_path("/ldoom/input/ev"));
+        assert!(expected_forward_path("/websockify"));
+        assert!(expected_forward_path("/core/rfb.js"));
+        assert!(!expected_forward_path("/__lambdadoom/state"));
+        assert!(!expected_forward_path("/random/admin"));
     }
 
     #[test]
@@ -1103,8 +1147,8 @@ mod tests {
     #[test]
     fn routes_audio_path_to_audio_port() {
         let c = cfg();
-        assert_eq!(c.port_for("/shrinkaudio"), 6902);
-        assert_eq!(c.port_for("/shrinkaudio?x=1"), 6902);
+        assert_eq!(c.port_for("/ldoom/audio"), 6902);
+        assert_eq!(c.port_for("/ldoom/audio?x=1"), 6902);
         assert_eq!(c.port_for("/"), 6901);
         assert_eq!(c.port_for("/websockify"), 6901);
         assert_eq!(c.port_for("/vnc.html"), 6901);
@@ -1113,11 +1157,10 @@ mod tests {
     #[test]
     fn routes_video_and_input_paths() {
         let c = cfg();
-        assert_eq!(c.port_for("/shrinkvideo"), 6903);
-        assert_eq!(c.port_for("/shrinkvideo?x=1"), 6903);
-        assert_eq!(c.port_for("/shrinkinput"), 6904);
-        assert_eq!(c.port_for("/shrinkinput/ev"), 6904);
-        // Fallback to the display port.
+        assert_eq!(c.port_for("/ldoom/video"), 6903);
+        assert_eq!(c.port_for("/ldoom/video?x=1"), 6903);
+        assert_eq!(c.port_for("/ldoom/input"), 6904);
+        assert_eq!(c.port_for("/ldoom/input/ev"), 6904);
         assert_eq!(c.port_for("/"), 6901);
     }
 
@@ -1130,7 +1173,6 @@ mod tests {
 
         assert_eq!(out.get(AUTH_HEADER).unwrap(), "the.secret.jwe");
         assert_eq!(out.get(PORT_HEADER).unwrap(), "6901");
-        // User-Agent is copied through.
         assert_eq!(out.get("user-agent").unwrap(), "test");
     }
 
@@ -1151,22 +1193,16 @@ mod tests {
 
     #[test]
     fn loopback_authority_accepts_local_rejects_foreign() {
-        // Host forms.
         assert!(is_loopback_authority("127.0.0.1:6080"));
         assert!(is_loopback_authority("127.0.0.1"));
         assert!(is_loopback_authority("localhost:6080"));
         assert!(is_loopback_authority("[::1]:6080"));
-        // Origin forms.
         assert!(is_loopback_authority("http://127.0.0.1:6080"));
         assert!(is_loopback_authority("http://localhost:6080"));
         assert!(is_loopback_authority("http://[::1]:6080"));
-        // Foreign authorities (RFC 2606 reserved `.example` TLD — illustrative stand-ins
-        // for an attacker domain; this is pure string parsing, no network I/O).
         assert!(!is_loopback_authority("foreign.example"));
         assert!(!is_loopback_authority("http://foreign.example"));
         assert!(!is_loopback_authority("http://foreign.example:6080"));
-        // DNS-rebinding suffix trick must not slip through: a naive starts_with/contains
-        // check on "127.0.0.1" would be fooled; we compare the whole host label.
         assert!(!is_loopback_authority("127.0.0.1.foreign.example"));
         assert!(!is_loopback_authority(
             "http://127.0.0.1.foreign.example:6080"

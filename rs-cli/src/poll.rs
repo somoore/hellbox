@@ -1,6 +1,4 @@
-//! Generic "poll an async getter until it reaches a terminal state" helper.
-//! Used by `build` (image CREATED/CREATE_FAILED), `up`/`resume` (RUNNING),
-//! and `suspend` (SUSPENDED).
+//! Async state polling helper.
 
 use std::collections::HashSet;
 use std::future::Future;
@@ -8,7 +6,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
 
-/// How often to poll, and how long before we give up.
 #[derive(Clone, Copy, Debug)]
 pub struct PollOpts {
     pub interval: Duration,
@@ -17,7 +14,6 @@ pub struct PollOpts {
 
 impl Default for PollOpts {
     fn default() -> Self {
-        // ~10s cadence (docs/architecture.md), generous ceiling for cold image builds.
         Self {
             interval: Duration::from_secs(10),
             timeout: Duration::from_secs(15 * 60),
@@ -25,11 +21,7 @@ impl Default for PollOpts {
     }
 }
 
-/// Poll `getter` until it returns a state in `terminal`, then return that state.
-///
-/// `getter` is an async closure returning the *current* state string. We don't
-/// interpret which terminal states are "good" vs "bad" — the caller checks the
-/// returned string (e.g. CREATED vs CREATE_FAILED). Logs each transition.
+/// Poll until `getter` returns a terminal state.
 pub async fn poll_until<F, Fut>(
     label: &str,
     terminal: &[&str],
@@ -47,7 +39,7 @@ where
     loop {
         let state = getter().await?;
         if last.as_deref() != Some(state.as_str()) {
-            tracing::info!(target: "shrink::poll", "{label}: {state}");
+            tracing::info!(target: "ldoom::poll", "{label}: {state}");
             last = Some(state.clone());
         }
         if terminal.contains(state.as_str()) {
@@ -69,8 +61,6 @@ mod tests {
     use super::*;
     use std::cell::Cell;
 
-    // Runnable check: poll_until returns once a terminal state appears, and
-    // surfaces the exact terminal string the caller must branch on.
     #[tokio::test]
     async fn stops_at_terminal_state() {
         let n = Cell::new(0u8);

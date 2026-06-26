@@ -40,6 +40,9 @@ the AWS docs for anything not listed here.
 - **Wake on traffic:** any data-plane request to a SUSPENDED VM auto-resumes it. To
   keep a suspended VM paused, poll state via the control plane (`GetMicrovm` does not
   resume), not by hitting the endpoint.
+- **Suspended duration:** configure `IdlePolicy.suspendedDurationSeconds` at 8 hours or
+  less. The live API may accept larger values, but AWS public copy describes suspended
+  state as preserved "for up to 8 hours", so LambdaDoom follows that public contract.
 
 ## Lifecycle hooks (the #1 build-failure source)
 

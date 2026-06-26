@@ -1,12 +1,5 @@
-#!/usr/bin/env python3
-# Assert X keyboard input focus on the game window.
-#
-# Xvnc runs with NO window manager, so nothing assigns X input focus. SDL2 usually
-# takes focus on a fullscreen window, but on a WM-less server it's not guaranteed --
-# and XTEST keystrokes injected by input_ws are delivered to whatever holds input
-# focus. If that's None/the root, the game never sees the keys. So every few seconds
-# we find the game window (WM_NAME contains "doom") and XSetInputFocus to it. Cheap,
-# idempotent, and re-asserts after the game restarts.
+#!/usr/bin/env python3.11
+# Keep X keyboard focus on the game window.
 import time
 from Xlib import display, X
 

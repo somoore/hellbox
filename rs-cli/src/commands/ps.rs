@@ -1,5 +1,4 @@
-//! `ldoom ps` — print the capsule table from state.json. With `--refresh`,
-//! call `list_microvms` and reconcile the live state back into the ledger.
+//! Print the local capsule table.
 
 use std::collections::HashMap;
 
@@ -21,7 +20,6 @@ pub async fn run(refresh: bool) -> Result<()> {
             .send()
             .await
             .context("list_microvms")?;
-        // Index live records by microvm_id (the list carries id + state, not endpoint).
         let by_id: HashMap<&str, &_> = live.items().iter().map(|m| (m.microvm_id(), m)).collect();
 
         let names: Vec<String> = state.capsules.keys().cloned().collect();
@@ -36,7 +34,6 @@ pub async fn run(refresh: bool) -> Result<()> {
                         })?;
                     }
                     None => {
-                        // Live API doesn't know it anymore → gone.
                         state.upsert(&name, |c| {
                             c.microvm_id = None;
                             c.endpoint = None;

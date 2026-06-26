@@ -2,7 +2,7 @@
 
 # LambdaDoom
 
-### DOOM, running inside an AWS Lambda MicroVM, streamed to your browser.
+### DOOM inside an AWS Lambda MicroVM.
 
 Suspend it mid firefight and the compute bill stops. Resume it and you are back on the exact
 frame, same demon mid lunge, same health, same ammo.
@@ -12,24 +12,17 @@ frame, same demon mid lunge, same health, same ammo.
 ---
 
 ```bash
+# after setup
 ldoom open   # a browser tab opens. it's DOOM. it's running in the cloud.
 ```
 
-LambdaDoom runs the original DOOM on a virtual machine in AWS and streams the video, audio,
-and your keypresses to a browser tab. Nothing runs on your laptop but the tab. It deploys into
-your own AWS account with one command, and one command removes it.
+LambdaDoom is DOOM running inside an AWS Lambda MicroVM, streamed to your browser.
 
-## What is an AWS Lambda MicroVM?
+Click Suspend and the machine freezes mid-fight. Compute billing stops. Click Resume and you
+are back on the same frame, with the same health, ammo, sound, and bad decisions.
 
-A new serverless building block that runs your code inside a full virtual machine: real VM
-isolation, near instant launch, and the ability to freeze a running machine and resume it
-later with its state intact, all with no servers to manage. It is powered by Firecracker, the
-same virtualization behind AWS Lambda. AWS launched it in June 2026:
-[the announcement](https://aws.amazon.com/blogs/aws/run-isolated-sandboxes-with-full-lifecycle-control-aws-lambda-introduces-microvms/).
-
-The piece that makes LambdaDoom work is suspend and resume. AWS snapshots the live memory of
-the VM, stops charging for compute, and restores it on demand. Freezing a live DOOM fight is
-the most direct way I found to feel what that primitive actually does.
+This is not a product. It is a playable systems demo: a way to make AWS Lambda MicroVMs feel
+real instead of abstract.
 
 ## Quickstart
 
@@ -42,14 +35,45 @@ cd LambdaDoom
 ```
 
 `deploy.sh` deploys the AWS prerequisites, downloads the prebuilt `ldoom` CLI for your system,
-builds the MicroVM image, launches it, and opens DOOM in your browser. In the tab: click the
-speaker icon for sound, click the game, and play (`W A S D` to move, `Ctrl` to fire, `Space`
-to open doors). Hit Suspend when you step away to stop the compute bill, and Resume to pick up
-where you left off.
+verifies its SHA256 checksum and GitHub artifact attestation when possible, builds the MicroVM
+image, launches it, and opens DOOM in your browser. In the tab: click the speaker icon for
+sound, click the game, and play (`W A S D` to move, `Ctrl` to fire, `Space` to open doors).
+Hit Suspend when you step away to stop the compute bill, and Resume to pick up where you left
+off.
 
 > **Cost:** a suspended VM is roughly cents per month, and a running, streamed session is
-> roughly $0.19 per hour. Suspend when you walk away, or run `./uninstall.sh` to remove
-> everything (the VM, the image, the stack, and all local state).
+> roughly $0.19 per hour before data transfer. The actual bill is:
+> `(running vCPU/GB-seconds) + snapshot read/write + snapshot storage + internet data transfer`.
+> Video/audio bitrate, region, and suspend/resume cycles matter. Suspend when you walk away,
+> or run `./uninstall.sh` to remove everything (the VM, the image, the stack, and all local
+> state).
+
+> **Browser:** the low-latency H.264/Opus path uses WebCodecs, so use current Chrome or Edge
+> for the intended experience. Safari and Firefox support may lag; use `ldoom config set
+> display vnc` for the noVNC fallback if the WebCodecs page cannot decode video or audio.
+
+## Why this exists
+
+AWS Lambda MicroVMs are clearly useful for AI agent sandboxing: isolated machines, lifecycle
+control, and the ability to freeze and resume work.
+
+I wanted to take a step back from the AI rush, put on some headphones, and fight demons.
+
+DOOM is a ridiculous test case, but a useful one. It makes the invisible parts of serverless
+visible: pixels, audio, keyboard input, browser access, lifecycle control, and live memory
+state. A normal demo can prove an API works. DOOM lets you feel what the primitive does.
+
+## What is happening?
+
+AWS Lambda MicroVMs run your code inside full virtual machines with serverless lifecycle
+control. You get VM isolation, near-instant launch, HTTPS/WSS ingress, and the ability to
+freeze a running machine and resume it later with memory state intact. They are powered by
+Firecracker, the same virtualization behind AWS Lambda. AWS launched them in June 2026:
+[the announcement](https://aws.amazon.com/blogs/aws/run-isolated-sandboxes-with-full-lifecycle-control-aws-lambda-introduces-microvms/).
+
+LambdaDoom uses that primitive as literally as possible: run a native ARM build of Chocolate
+Doom, stream its pixels and audio to a browser, send keyboard input back in, then freeze and
+resume the whole machine while the game is still alive.
 
 ## How it works
 
@@ -72,7 +96,22 @@ header that browsers cannot set, so `ldoom open` runs a tiny loopback proxy that
 
 Full design is in [docs/architecture.md](docs/architecture.md), the security model is in
 [docs/security.md](docs/security.md), and the verified MicroVMs API facts are in
-[docs/microvm-ground-truth.md](docs/microvm-ground-truth.md).
+[docs/microvm-ground-truth.md](docs/microvm-ground-truth.md). To replace DOOM with another
+capsule, see [docs/generalizing.md](docs/generalizing.md).
+
+## Demo media
+
+Demo screenshots and clips should come from a real LambdaDoom session, not a mock page. Once
+you have a running proxy:
+
+```bash
+ldoom open --name doom --no-open
+make capture-demo-media
+```
+
+That writes `assets/demo/lambdadoom-live.png` and `assets/demo/lambdadoom-live.webm` from the
+live browser stream. The script exits instead of generating placeholder media if
+`127.0.0.1:6080` is not serving LambdaDoom.
 
 <details>
 <summary><b>Configuration</b> (environment variables)</summary>
@@ -82,7 +121,9 @@ Full design is in [docs/architecture.md](docs/architecture.md), the security mod
 | `AWS_REGION` | `us-east-1` | Region to deploy into (any region with Lambda MicroVMs works). |
 | `LAMBDADOOM_NAME` | `doom` | Capsule name (the image and the MicroVM). |
 | `LAMBDADOOM_STACK` | `LambdaDoom` | CloudFormation stack name. |
+| `LAMBDADOOM_REPO` | `somoore/LambdaDoom` | Release repo to download `ldoom` from. |
 | `LAMBDADOOM_VERSION` | latest release | Pin the `ldoom` binary to a specific release tag. |
+| `LAMBDADOOM_SKIP_ATTESTATION` | `0` | Set to `1` only if you deliberately want to skip `gh attestation verify`. |
 | `LAMBDADOOM_HOME` | `~/.lambdadoom` | Where config, state, and the binary live. |
 | `LDOOM_BIN` | none | Use a local `ldoom` binary instead of downloading one. |
 
@@ -131,12 +172,13 @@ ldoom ps         # list capsules and their state
 
 ## Legal
 
-LambdaDoom ships **only** the **shareware** `DOOM1.WAD` plus **GPLv2 Chocolate Doom**, both
-fetched at build time and never committed to this repo. It never ships the retail `DOOM.WAD` or
-`DOOM2.WAD`. DOOM and the DOOM WADs are trademarks and property of their respective owners.
+LambdaDoom is an independent, unofficial demo project. It is not affiliated with, sponsored by,
+endorsed by, or approved by AWS, Amazon.com, id Software, Bethesda, ZeniMax, Microsoft, or their
+affiliates.
 
-This is an independent, unofficial project, not for sale, and not affiliated with or endorsed
-by AWS, Amazon.com, or id Software. AWS, AWS Lambda, and Firecracker are trademarks of
-Amazon.com, Inc. or its affiliates, used here only to describe what LambdaDoom runs on.
-LambdaDoom runs on AWS services in your own account, under your own agreement with AWS, and you
-are responsible for any charges it incurs.
+LambdaDoom does not include or distribute retail DOOM game assets. By default, the build process
+downloads the shareware `DOOM1.WAD` and builds Chocolate Doom at image build time. You are
+responsible for any AWS charges incurred in your own account.
+
+See [LEGAL.md](LEGAL.md) for full third-party notices, trademark disclaimers, asset usage notes,
+and license information.

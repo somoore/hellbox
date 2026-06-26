@@ -1,14 +1,6 @@
 name: release
 
-# Build the `ldoom` CLI for every supported OS/arch and attach the binaries to a
-# GitHub release, so `deploy.sh` can download a prebuilt binary (no compiling).
-#
-# Trigger by pushing a tag (e.g. `git tag v0.1.0 && git push origin v0.1.0`), or run
-# manually with a tag name. Asset names match deploy.sh: ldoom-<os>-<arch>[.exe].
-#
-# Each target builds on a NATIVE runner so the C/asm crypto deps (aws-lc-rs, ring)
-# compile without cross-toolchains. The arm64 Linux/Windows runners are GitHub-hosted
-# (GA); on a private repo they consume Actions minutes.
+# Build release assets for deploy.sh.
 
 on:
   push:
@@ -20,7 +12,9 @@ on:
         required: true
 
 permissions:
-  contents: write   # create the release + upload assets
+  contents: write
+  attestations: write
+  id-token: write
 
 jobs:
   build:
@@ -32,8 +26,7 @@ jobs:
         include:
           - { runner: ubuntu-latest,    target: x86_64-unknown-linux-gnu,  asset: ldoom-linux-x86_64 }
           - { runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, asset: ldoom-linux-arm64 }
-          # x86_64 mac is cross-compiled on an Apple-Silicon runner (Intel macos-13
-          # runners are scarce and queue indefinitely); macOS cross-compiles natively.
+          # macOS x86_64 cross-compiles reliably from Apple Silicon.
           - { runner: macos-14,         target: x86_64-apple-darwin,       asset: ldoom-macos-x86_64 }
           - { runner: macos-14,         target: aarch64-apple-darwin,      asset: ldoom-macos-arm64 }
           - { runner: windows-latest,   target: x86_64-pc-windows-msvc,    asset: ldoom-windows-x86_64.exe }
@@ -48,7 +41,7 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      # aws-lc-rs needs NASM (x86 asm) + a C toolchain; cmake is preinstalled on hosted runners.
+      # aws-lc-rs needs NASM for x86 asm.
       - uses: ilammy/setup-nasm@v1
 
       - name: Build
@@ -63,8 +56,24 @@ jobs:
         shell: bash
         run: cp "target/${{ matrix.target }}/release/ldoom.exe" "${{ matrix.asset }}"
 
+      - name: Checksum asset
+        shell: bash
+        run: |
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
+          else
+            shasum -a 256 "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
+          fi
+
+      - name: Attest asset
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: rs-cli/${{ matrix.asset }}
+
       - name: Attach to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          files: rs-cli/${{ matrix.asset }}
+          files: |
+            rs-cli/${{ matrix.asset }}
+            rs-cli/${{ matrix.asset }}.sha256

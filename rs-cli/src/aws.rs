@@ -9,8 +9,6 @@ use crate::config::Config;
 pub struct Aws {
     pub microvm: MicrovmClient,
     pub s3: aws_sdk_s3::Client,
-    #[allow(dead_code)]
-    pub region: String,
 }
 
 impl Aws {
@@ -24,10 +22,6 @@ impl Aws {
         let microvm = MicrovmClient::new(&sdk_config);
         let s3 = aws_sdk_s3::Client::new(&sdk_config);
 
-        Ok(Self {
-            microvm,
-            s3,
-            region: cfg.region.clone(),
-        })
+        Ok(Self { microvm, s3 })
     }
 }

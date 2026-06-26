@@ -1,6 +1,7 @@
 //! CLI for running DOOM in an AWS Lambda MicroVM.
 
 mod aws;
+#[cfg(feature = "proxy")]
 mod browser;
 mod commands;
 mod config;

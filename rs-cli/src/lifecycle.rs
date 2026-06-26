@@ -36,6 +36,7 @@ pub async fn poll_microvm_state(
     .await
 }
 
+#[cfg(any(feature = "proxy", test))]
 pub fn host_of(endpoint: &str) -> String {
     endpoint
         .trim_start_matches("https://")

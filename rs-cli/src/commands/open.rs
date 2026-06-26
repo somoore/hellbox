@@ -4,8 +4,10 @@ use anyhow::{Context, Result};
 use aws_sdk_lambdamicrovms::types::PortSpecification;
 
 use crate::aws::Aws;
+#[cfg(feature = "proxy")]
 use crate::browser;
 use crate::config::Config;
+#[cfg(any(feature = "proxy", test))]
 use crate::lifecycle::host_of;
 use crate::state::State;
 
@@ -58,42 +60,58 @@ pub async fn run(name: &str, no_open: bool) -> Result<()> {
     };
 
     let idle_minutes = cfg.idle_suspend_minutes.unwrap_or(0);
-    open_fork_b(
-        &endpoint,
+    open_fork_b(OpenForkBArgs {
+        endpoint: &endpoint,
         port,
         audio_port,
         video_port,
         input_port,
         h264,
-        &jwe,
+        jwe: &jwe,
         no_open,
-        &aws,
-        &microvm_id,
+        aws: &aws,
+        microvm_id: &microvm_id,
         name,
         idle_minutes,
-    )
+    })
     .await
 }
 
-#[cfg(feature = "proxy")]
-#[allow(clippy::too_many_arguments)]
-async fn open_fork_b(
-    endpoint: &str,
+struct OpenForkBArgs<'a> {
+    endpoint: &'a str,
     port: i32,
     audio_port: i32,
     video_port: i32,
     input_port: i32,
     h264: bool,
-    jwe: &str,
+    jwe: &'a str,
     no_open: bool,
-    aws: &Aws,
-    microvm_id: &str,
-    name: &str,
+    aws: &'a Aws,
+    microvm_id: &'a str,
+    name: &'a str,
     idle_minutes: u64,
-) -> Result<()> {
+}
+
+#[cfg(feature = "proxy")]
+async fn open_fork_b(args: OpenForkBArgs<'_>) -> Result<()> {
     use std::sync::Arc;
 
     use crate::proxy::{self, ProxyActivity, ProxyConfig, ProxyControl, Upstream};
+
+    let OpenForkBArgs {
+        endpoint,
+        port,
+        audio_port,
+        video_port,
+        input_port,
+        h264,
+        jwe,
+        no_open,
+        aws,
+        microvm_id,
+        name,
+        idle_minutes,
+    } = args;
 
     let activity = Arc::new(ProxyActivity::default());
     let upstream = Upstream::new(host_of(endpoint), jwe.to_string());
@@ -206,21 +224,21 @@ fn generate_control_secret() -> Result<String> {
 }
 
 #[cfg(not(feature = "proxy"))]
-#[allow(clippy::too_many_arguments)]
-async fn open_fork_b(
-    _endpoint: &str,
-    _port: i32,
-    _audio_port: i32,
-    _video_port: i32,
-    _input_port: i32,
-    _h264: bool,
-    _jwe: &str,
-    _no_open: bool,
-    _aws: &Aws,
-    _microvm_id: &str,
-    _name: &str,
-    _idle_minutes: u64,
-) -> Result<()> {
+async fn open_fork_b(args: OpenForkBArgs<'_>) -> Result<()> {
+    let _ = (
+        args.endpoint,
+        args.port,
+        args.audio_port,
+        args.video_port,
+        args.input_port,
+        args.h264,
+        args.jwe,
+        args.no_open,
+        args.aws,
+        args.microvm_id,
+        args.name,
+        args.idle_minutes,
+    );
     anyhow::bail!(
         "ldoom open requires the `proxy` feature (Fork B loopback proxy), which is \
          on by default. Rebuild without `--no-default-features`."

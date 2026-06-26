@@ -1,0 +1,19 @@
+version: 2
+updates:
+  # GitHub Actions are SHA-pinned (see scripts/check-action-pins.sh). Dependabot
+  # opens reviewable PRs that bump the SHA and the trailing `# vX` comment together,
+  # so pin updates get the same review as any other security-sensitive change.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+    labels:
+      - dependencies
+      - github-actions
+    groups:
+      # One PR per week for routine action bumps instead of one per action.
+      actions:
+        patterns:
+          - "*"

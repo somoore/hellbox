@@ -1,4 +1,4 @@
-//! Capsule state stored in `~/.lambdadoom/state.json`.
+//! Capsule state stored in `~/.hellbox/state.json`.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::config::lambdadoom_dir;
+use crate::config::hellbox_dir;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Capsule {
@@ -30,7 +30,7 @@ pub struct State {
 
 impl State {
     pub fn path() -> Result<PathBuf> {
-        Ok(lambdadoom_dir()?.join("state.json"))
+        Ok(hellbox_dir()?.join("state.json"))
     }
 
     pub fn load() -> Result<Self> {
@@ -61,7 +61,7 @@ impl State {
 
     pub fn require(&self, name: &str) -> Result<&Capsule> {
         self.get(name).with_context(|| {
-            format!("no capsule named '{name}' in state — run `ldoom build --name {name}` first")
+            format!("no capsule named '{name}' in state — run `hellbox build --name {name}` first")
         })
     }
 

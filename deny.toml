@@ -1,4 +1,4 @@
-# Rust dependency license policy for the ldoom CLI.
+# Rust dependency license policy for the hellbox CLI.
 #
 # This is intentionally scoped to Cargo dependencies. Capsule/image licensing is tracked in
 # THIRD_PARTY_NOTICES.md because the image includes OS packages, Python wheels, Chocolate Doom,

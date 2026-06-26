@@ -51,7 +51,7 @@ pub async fn run(refresh: bool) -> Result<()> {
 
 fn print_table(state: &State) {
     if state.capsules.is_empty() {
-        println!("no capsules yet — `ldoom build --name <name>`");
+        println!("no capsules yet — `hellbox build --name <name>`");
         return;
     }
     println!("{:<16} {:<12} {:<22} ENDPOINT", "NAME", "STATE", "MICROVM");

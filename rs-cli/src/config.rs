@@ -1,4 +1,4 @@
-//! User config loaded from `~/.lambdadoom/config.toml`.
+//! User config loaded from `~/.hellbox/config.toml`.
 
 use std::path::PathBuf;
 
@@ -56,7 +56,7 @@ fn default_input_port() -> i32 {
 
 impl Config {
     pub fn path() -> Result<PathBuf> {
-        Ok(lambdadoom_dir()?.join("config.toml"))
+        Ok(hellbox_dir()?.join("config.toml"))
     }
 
     pub fn load() -> Result<Self> {
@@ -86,13 +86,13 @@ impl Config {
     }
 }
 
-pub fn lambdadoom_dir() -> Result<PathBuf> {
-    if let Ok(dir) = std::env::var("LAMBDADOOM_HOME")
+pub fn hellbox_dir() -> Result<PathBuf> {
+    if let Ok(dir) = std::env::var("HELLBOX_HOME")
         && !dir.trim().is_empty()
     {
         return Ok(PathBuf::from(dir));
     }
-    let dirs = directories::BaseDirs::new()
-        .context("could not resolve home directory for ~/.lambdadoom")?;
-    Ok(dirs.home_dir().join(".lambdadoom"))
+    let dirs =
+        directories::BaseDirs::new().context("could not resolve home directory for ~/.hellbox")?;
+    Ok(dirs.home_dir().join(".hellbox"))
 }

@@ -1,12 +1,12 @@
 [package]
-name = "lambdadoom"
+name = "hellbox"
 version = "1.0.0"
 edition = "2024"
 description = "Run native DOOM inside an AWS Lambda MicroVM, streamed to a browser tab"
 license = "Apache-2.0"
 
 [[bin]]
-name = "ldoom"
+name = "hellbox"
 path = "src/main.rs"
 
 [dependencies]
@@ -21,7 +21,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
-directories = "5"          # ~/.lambdadoom on mac/win/linux
+directories = "5"          # ~/.hellbox on mac/win/linux
 getrandom = "0.2"          # per-session loopback control secret
 
 # AWS

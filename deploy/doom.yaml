@@ -1,8 +1,8 @@
 AWSTemplateFormatVersion: '2010-09-09'
 
 Description: >
-  LambdaDoom prerequisites: build artifact bucket and IAM roles for Lambda MicroVMs.
-  Copy Outputs into ~/.lambdadoom/config.toml after deploy.
+  Hellbox prerequisites: build artifact bucket and IAM roles for Lambda MicroVMs.
+  Copy Outputs into ~/.hellbox/config.toml after deploy.
 
 Parameters:
   BuildServicePrincipal:
@@ -70,7 +70,7 @@ Resources:
               StringEquals:
                 aws:SourceAccount: !Ref AWS::AccountId
       Policies:
-        - PolicyName: lambdadoom-build
+        - PolicyName: hellbox-build
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -106,11 +106,11 @@ Outputs:
     Description: Region this stack and your MicroVMs live in.
     Value: !Ref AWS::Region
   ArtifactBucket:
-    Description: artifact_bucket for ~/.lambdadoom/config.toml
+    Description: artifact_bucket for ~/.hellbox/config.toml
     Value: !Ref ArtifactBucket
   BuildRoleArn:
-    Description: build_role_arn for ~/.lambdadoom/config.toml
+    Description: build_role_arn for ~/.hellbox/config.toml
     Value: !GetAtt BuildRole.Arn
   ExecutionRoleArn:
-    Description: execution_role_arn for ~/.lambdadoom/config.toml
+    Description: execution_role_arn for ~/.hellbox/config.toml
     Value: !GetAtt ExecutionRole.Arn

@@ -1,6 +1,6 @@
 # Security Policy
 
-LambdaDoom is a single-user, own-AWS-account demo. The full threat model — trust
+Hellbox is a single-user, own-AWS-account demo. The full threat model — trust
 boundaries, what protects you, and the deliberate non-goals — is documented in
 [docs/security.md](docs/security.md). Read that first; it is the authoritative description
 of the security posture.
@@ -10,7 +10,7 @@ of the security posture.
 This is a personal demo, not a hosted service. If you find a security issue, please **do not
 post a public exploit**. Instead:
 
-- Open a [private security advisory](https://github.com/somoore/LambdaDoom/security/advisories/new), or
+- Open a [private security advisory](https://github.com/somoore/Hellbox/security/advisories/new), or
 - Open a regular issue for low-risk findings, or
 - Contact the repository owner directly.
 

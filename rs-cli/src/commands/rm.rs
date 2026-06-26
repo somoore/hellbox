@@ -23,7 +23,7 @@ pub async fn run(name: &str) -> Result<()> {
             .microvm_identifier(&microvm_id)
             .send()
             .await;
-        tracing::info!(target: "ldoom::rm", "terminating {microvm_id}");
+        tracing::info!(target: "hellbox::rm", "terminating {microvm_id}");
 
         // Wait out async termination; a get error means it is already gone.
         let _ = poll_until(
@@ -51,7 +51,7 @@ pub async fn run(name: &str) -> Result<()> {
 
     if let Some(image_arn) = cap.image_arn.clone() {
         delete_image_with_retry(&aws, &image_arn).await?;
-        tracing::info!(target: "ldoom::rm", "deleted image {image_arn}");
+        tracing::info!(target: "hellbox::rm", "deleted image {image_arn}");
     }
 
     state.remove(name)?;
@@ -81,7 +81,7 @@ async fn delete_image_with_retry(aws: &Aws, image_arn: &str) -> Result<()> {
                     .unwrap_or(false);
                 if transient && start.elapsed() < deadline {
                     tracing::info!(
-                        target: "ldoom::rm",
+                        target: "hellbox::rm",
                         "image still has a terminating microvm; retrying delete in {interval:?}"
                     );
                     tokio::time::sleep(interval).await;

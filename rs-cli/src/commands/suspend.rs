@@ -24,7 +24,7 @@ pub async fn run(name: &str) -> Result<()> {
         .send()
         .await
         .context("suspend_microvm")?;
-    tracing::info!(target: "ldoom::suspend", "suspending {microvm_id}");
+    tracing::info!(target: "hellbox::suspend", "suspending {microvm_id}");
 
     let final_state = poll_microvm_state(
         &aws.microvm,

@@ -16,7 +16,7 @@ capsule/app/*.zip
 shrink-context-*.zip
 
 .shrink/
-.lambdadoom/
+.hellbox/
 .shrink-build-*.log
 *-open.log
 *-open.*.log

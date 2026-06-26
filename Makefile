@@ -1,6 +1,6 @@
-# LambdaDoom project tasks.
+# Hellbox project tasks.
 
-LAUNCH_BUCKET ?= lambdadoom-launch-932930471665
+LAUNCH_BUCKET ?= hellbox-launch-932930471665
 LAUNCH_REGION ?= us-east-1
 
 .PHONY: sync-template

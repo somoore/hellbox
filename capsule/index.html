@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>DOOM on AWS Lambda MicroVM</title>
+<title>Hellbox — DOOM on AWS Lambda MicroVM</title>
 <style>
   :root{
     --bg:#0A0B0D; --panel-top:#13161B; --panel-bot:#0C0E12; --hairline:#20242B;
@@ -23,10 +23,7 @@
     flex-shrink:0;padding:0 24px;background:linear-gradient(180deg,var(--panel-top) 0%,var(--panel-bot) 100%);
     border-bottom:1px solid var(--hairline);box-shadow:inset 0 1px 0 rgba(255,255,255,.03)}
   .brand{display:flex;align-items:center;gap:14px;min-width:0}
-  .mark{display:flex;align-items:center;justify-content:center;width:40px;height:32px;
-    border-radius:9px;flex-shrink:0;color:#1A0E06;font-weight:900;font-size:16px;letter-spacing:-.04em;
-    background:linear-gradient(150deg,var(--ember2) 0%,var(--ember) 55%,var(--ember-dk) 100%);
-    box-shadow:0 0 0 1px rgba(255,138,61,.35),0 4px 14px rgba(255,107,26,.30)}
+  .mark{display:flex;align-items:center;justify-content:center;width:36px;height:36px;flex-shrink:0}
   .word{display:flex;align-items:baseline;gap:1px;font-size:18px;letter-spacing:.01em}
   .word .dim{font-weight:600;color:#9CA1AB}
   .word .strong{font-weight:900;color:var(--text)}
@@ -100,7 +97,7 @@
   /* responsive */
   @media (max-width:680px){
     #bar{height:54px;padding:0 14px}
-    .mark{width:34px;height:28px;font-size:14px}
+    .mark{width:30px;height:30px}
     .word{font-size:16px}
     .subtitle,.brand .vrule{display:none}
     .chip .telemetry,.chip .vrule.small{display:none}
@@ -113,8 +110,8 @@
 <body>
   <div id="bar">
     <div class="brand">
-      <div class="mark">&#955;D</div>
-      <div class="word"><span class="dim">LAMBDA</span><span class="strong">DOOM</span></div>
+      <div class="mark"><svg width="32" height="32" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="hbf" x1="20" y1="3" x2="20" y2="26" gradientUnits="userSpaceOnUse"><stop stop-color="#FFD23D"/><stop offset=".45" stop-color="#FF8A3D"/><stop offset="1" stop-color="#FF6B1A"/></linearGradient></defs><path d="M20 4 C23.5 9.5 21.5 13 23 16 C25 14.5 25 11.5 25 11.5 C27.5 15 27.5 19.5 24.5 22 C22.8 23.4 21.2 24 20 24 C18.8 24 17.2 23.4 15.5 22 C12.5 19.5 13 15 15.5 12.5 C15.5 15 16.5 15.5 17.5 14.5 C16.8 10.5 17 7.5 20 4 Z" fill="url(#hbf)"/><path d="M13 23 C11 20 12.5 17.5 12 15.5 C13.8 16.8 13.8 18.5 13.8 18.5 C15 16 14 14 15.5 12.5 C15 16.5 16.5 18 15.5 21 Z" fill="url(#hbf)" opacity=".85"/><path d="M27 23 C29 20.5 27.8 18 28.2 16 C26.6 17.2 26.6 18.8 26.6 18.8 C25.6 16.5 26.4 14.5 25 13 C25.4 16.6 24 18 25 21 Z" fill="url(#hbf)" opacity=".85"/><path d="M7.5 24.5 H32.5 L30 36 H10 Z" fill="#1B1E24"/><rect x="6" y="22.5" width="28" height="3.4" rx="1.5" fill="#2A2F37"/><path d="M14 26.5 L13 34 M20 26.5 V34 M26 26.5 L27 34" stroke="#FF6B1A" stroke-width="1.2" opacity=".45" stroke-linecap="round"/><circle cx="13.5" cy="37.5" r="1.7" fill="#2A2F37"/><circle cx="26.5" cy="37.5" r="1.7" fill="#2A2F37"/></svg></div>
+      <div class="word"><span class="dim">HELL</span><span class="strong">BOX</span></div>
       <div class="vrule"></div>
       <span class="subtitle">RUNNING ON AWS&#8201;LAMBDA MICROVM</span>
     </div>
@@ -196,7 +193,7 @@ if (H264) {
   wrap.appendChild(ifr);
 }
 
-// H.264: WS /ldoom/video -> WebCodecs -> canvas.
+// H.264: WS /hellbox/video -> WebCodecs -> canvas.
 // Each binary frame is [1 byte: 1=key,0=delta] + a raw Annex-B H.264 access unit.
 function startVideo(canvas) {
   if (!('VideoDecoder' in window)) {
@@ -223,7 +220,7 @@ function startVideo(canvas) {
   // Baseline 3.1, Annex-B with in-band SPS/PPS.
   dec.configure({ codec: 'avc1.42E01F', optimizeForLatency: true, hardwareAcceleration: 'no-preference' });
 
-  const ws = new WebSocket('ws://' + location.host + '/ldoom/video');
+  const ws = new WebSocket('ws://' + location.host + '/hellbox/video');
   ws.binaryType = 'arraybuffer';
   ws.onopen  = () => setStatus('connected (H.264) — waiting for keyframe');
   ws.onclose = () => setStatus('video closed');
@@ -245,9 +242,9 @@ function startVideo(canvas) {
     (bytes * 8 / 1000 | 0) + ' kbit total'), 1000);
 }
 
-// Input: keyboard/mouse -> WS /ldoom/input.
+// Input: keyboard/mouse -> WS /hellbox/input.
 function startInput(canvas) {
-  const ws = new WebSocket('ws://' + location.host + '/ldoom/input');
+  const ws = new WebSocket('ws://' + location.host + '/hellbox/input');
   const send = o => { if (ws.readyState === 1) ws.send(JSON.stringify(o)); };
   // Prevent browser shortcuts that steal gameplay input.
   const SWALLOW = new Set([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab']);
@@ -271,7 +268,7 @@ function startInput(canvas) {
   canvas.addEventListener('contextmenu', e => e.preventDefault());
 }
 
-// Audio: WS /ldoom/audio -> Opus -> Web Audio.
+// Audio: WS /hellbox/audio -> Opus -> Web Audio.
 // Frame 1 is OpusHead; later frames are raw 20 ms Opus packets.
 const audioBtn = document.getElementById('go');
 let audioCtx = null, audioOn = false;
@@ -329,7 +326,7 @@ function enableAudio() {
 
   let configured = false;
   let ts = 0;                          // microseconds; +20 ms per Opus frame.
-  const ws = new WebSocket("ws://" + location.host + "/ldoom/audio");
+  const ws = new WebSocket("ws://" + location.host + "/hellbox/audio");
   ws.binaryType = "arraybuffer";
   ws.onmessage = ev => {
     const buf = new Uint8Array(ev.data);

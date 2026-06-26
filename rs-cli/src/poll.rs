@@ -39,7 +39,7 @@ where
     loop {
         let state = getter().await?;
         if last.as_deref() != Some(state.as_str()) {
-            tracing::info!(target: "ldoom::poll", "{label}: {state}");
+            tracing::info!(target: "hellbox::poll", "{label}: {state}");
             last = Some(state.clone());
         }
         if terminal.contains(state.as_str()) {

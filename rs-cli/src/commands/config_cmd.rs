@@ -40,7 +40,7 @@ pub fn set(key: &str, value: &str) -> Result<()> {
                 );
             } else {
                 println!(
-                    "set idle_suspend_minutes = {mins}  (`ldoom open` auto-suspends after {mins} idle min)"
+                    "set idle_suspend_minutes = {mins}  (`hellbox open` auto-suspends after {mins} idle min)"
                 );
             }
         }
@@ -51,14 +51,14 @@ pub fn set(key: &str, value: &str) -> Result<()> {
                     cfg.display = None;
                     cfg.save()?;
                     println!(
-                        "set display = vnc  (noVNC, default — `ldoom open` opens the plain URL)"
+                        "set display = vnc  (noVNC, default — `hellbox open` opens the plain URL)"
                     );
                 }
                 "h264" => {
                     cfg.display = Some("h264".to_string());
                     cfg.save()?;
                     println!(
-                        "set display = h264  (H.264/WebCodecs — `ldoom open` opens with ?display=h264)"
+                        "set display = h264  (H.264/WebCodecs — `hellbox open` opens with ?display=h264)"
                     );
                 }
                 _ => bail!(
@@ -85,7 +85,7 @@ pub fn unset(key: &str) -> Result<()> {
             cfg.display = None;
             cfg.save()?;
             println!(
-                "unset display  (back to vnc/noVNC default — `ldoom open` opens the plain URL)"
+                "unset display  (back to vnc/noVNC default — `hellbox open` opens the plain URL)"
             );
         }
         other => unknown_key(other)?,

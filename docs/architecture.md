@@ -4,7 +4,7 @@ How I run native DOOM inside an AWS Lambda MicroVM and stream it to a browser ta
 the design came from working around the platform's constraints, which I call out as I go.
 
 > **Status: proven end to end in three regions** (us-east-1, us-east-2, us-west-2). The
-> `ldoom` CLI drives the real control plane through the full lifecycle
+> `hellbox` CLI drives the real control plane through the full lifecycle
 > (`build`, `up`, `open`, `suspend`, `resume`, `down`). Native Chocolate Doom streams with
 > video, audio, and keyboard input, and suspends and resumes on a live memory snapshot. The
 > API values below are ones I verified live; see
@@ -25,9 +25,9 @@ drives the lifecycle and renders the stream.
 flowchart LR
     subgraph CLIENT["Your machine (thin client)"]
         direction TB
-        CLI["ldoom CLI (Rust)"]
+        CLI["hellbox CLI (Rust)"]
         BROWSER["Browser tab<br/>WebCodecs + Web Audio + input"]
-        PROXY["ldoom open<br/>127.0.0.1:6080 proxy<br/>injects X-aws-proxy-auth"]
+        PROXY["hellbox open<br/>127.0.0.1:6080 proxy<br/>injects X-aws-proxy-auth"]
     end
     subgraph AWS["AWS"]
         direction TB
@@ -91,11 +91,11 @@ Lambda MicroVMs are opinionated. Each constraint below shaped the design.
 sequenceDiagram
     autonumber
     actor U as User
-    participant CLI as ldoom CLI
+    participant CLI as hellbox CLI
     participant S3 as S3
     participant CP as MicroVMs control plane
 
-    U->>CLI: ldoom build --name demo
+    U->>CLI: hellbox build --name demo
     CLI->>CLI: zip capsule (Dockerfile + rootfs + DOOM1.WAD)
     CLI->>S3: put_object context.zip
     CLI->>CP: create_microvm_image (base image, build role, readyTimeout 600)
@@ -118,18 +118,18 @@ sequenceDiagram
 sequenceDiagram
     autonumber
     actor U as User
-    participant CLI as ldoom CLI
+    participant CLI as hellbox CLI
     participant CP as MicroVMs control plane
     participant BR as Browser
     participant EP as MicroVM endpoint
 
-    U->>CLI: ldoom up --name demo
+    U->>CLI: hellbox up --name demo
     CLI->>CP: run_microvm (image, idle policy)
     loop poll until RUNNING
         CLI->>CP: get_microvm
     end
 
-    U->>CLI: ldoom open --name demo
+    U->>CLI: hellbox open --name demo
     CLI->>CP: create_microvm_auth_token (30 min, ports 6901-6904)
     CP-->>CLI: JWE token (X-aws-proxy-auth)
     CLI->>CLI: start 127.0.0.1:6080 reverse-proxy (Fork B)
@@ -146,7 +146,7 @@ sequenceDiagram
 sequenceDiagram
     autonumber
     actor U as User
-    participant CLI as ldoom CLI / control bar
+    participant CLI as hellbox CLI / control bar
     participant CP as MicroVMs control plane
     participant CAP as Capsule
 
@@ -218,13 +218,13 @@ window so input reaches DOOM.
 The MicroVM endpoint authenticates with a token (a JWE) in the `X-aws-proxy-auth` header and
 selects the target port with `X-aws-proxy-port`. The same token in a query string returns
 403, and browsers cannot set headers on a navigation or a `WebSocket`, so a tab cannot
-authenticate to the endpoint on its own. So `ldoom open` runs a loopback reverse-proxy on
+authenticate to the endpoint on its own. So `hellbox open` runs a loopback reverse-proxy on
 `127.0.0.1:6080`: the browser talks plain HTTP and WebSocket to loopback, and the proxy
 injects the headers and forwards over TLS. The token lives only in the proxy.
 
 The proxy (`rs-cli/src/proxy.rs`, on `hyper` 1.x) handles a request one of three ways:
 
-1. **`/__lambdadoom/*` goes to the local control plane.** Never forwarded. Drives suspend,
+1. **`/__hellbox/*` goes to the local control plane.** Never forwarded. Drives suspend,
    resume, and state with SigV4 (which works while the MicroVM is frozen) and powers the injected
    control panel.
 2. **A WebSocket upgrade** dials the upstream `wss://` with the auth and port headers, answers
@@ -233,13 +233,13 @@ The proxy (`rs-cli/src/proxy.rs`, on `hyper` 1.x) handles a request one of three
    page the proxy splices in the control panel.
 
 A path-prefix table maps one loopback origin onto the four internal services via
-`X-aws-proxy-port`: `/ldoom/audio` to 6902, `/ldoom/video` to 6903, `/ldoom/input` to 6904,
+`X-aws-proxy-port`: `/hellbox/audio` to 6902, `/hellbox/video` to 6903, `/hellbox/input` to 6904,
 and everything else to the display port 6901.
 
-The `/__lambdadoom/*` endpoints run AWS calls with your credentials, so they are hardened
+The `/__hellbox/*` endpoints run AWS calls with your credentials, so they are hardened
 against CSRF, DNS rebinding, and blind local calls: the `Host` header must be loopback, the
 `Origin` (when present) must be the loopback origin, the request must carry the per-session
-HttpOnly `ldoom_control` cookie, and `suspend` and `resume` require `POST`. Full threat model
+HttpOnly `hellbox_control` cookie, and `suspend` and `resume` require `POST`. Full threat model
 in [security.md](security.md).
 
 ---
@@ -263,7 +263,7 @@ Two snapshot-specific concerns:
   run nor a resume restores a blank screen. Enforced, not hoped for.
 - **Entropy on resume.** A resumed MicroVM replays frozen entropy, so a CSPRNG seeded before the
   snapshot would produce the same bytes twice, a real problem for TLS terminated inside the
-  MicroVM. In LambdaDoom the endpoint terminates TLS, so the hop inside the MicroVM is plain and
+  MicroVM. In Hellbox the endpoint terminates TLS, so the hop inside the MicroVM is plain and
   this is not exercised. A future capsule that terminates TLS inside the MicroVM should reseed
   the entropy pool and bounce the listener on resume.
 
@@ -280,7 +280,7 @@ Full threat model in [security.md](security.md).
 | Video | **ffmpeg x11grab to libx264 to WebCodecs** | An inter-frame codec over WebSockets, far less egress than VNC dirty rectangles for full-motion content. |
 | Audio | **PulseAudio to Opus to WebCodecs** | About 13 to 15 times less egress than raw PCM at transparent quality. |
 | Input | **XTEST (python-xlib) over WebSockets** | A reverse channel for the H.264 path, with `focus.py` keeping the game window focused. |
-| Stream auth | **Fork B loopback proxy** (`ldoom open`) | Browsers cannot set `X-aws-proxy-auth`, so a header-injecting loopback proxy is the only path that works. |
+| Stream auth | **Fork B loopback proxy** (`hellbox open`) | Browsers cannot set `X-aws-proxy-auth`, so a header-injecting loopback proxy is the only path that works. |
 | CLI | **Rust** | One distributable binary using the official `aws-sdk-lambdamicrovms` crate (no `aws` CLI shell-out). SigV4 signing name is `lambda`. Ships prebuilt via GitHub Releases for Linux, macOS, and Windows on x86_64 and arm64. Source in `rs-cli/`. |
 | Infra | **CloudFormation** (`deploy/doom.yaml`) | One self-serve stack: an S3 artifact bucket and the build and execution IAM roles. |
 
@@ -289,7 +289,7 @@ Full threat model in [security.md](security.md).
 ## 9. Repository layout
 
 ```
-LambdaDoom/
+Hellbox/
 ├── deploy.sh               # one-command front door: deploy, fetch binary, build/up/open
 ├── uninstall.sh            # remove everything (MicroVM, image, stack, binary, local state)
 ├── deploy/doom.yaml        # CloudFormation: S3 bucket + IAM build/exec roles (Launch Stack)
@@ -297,11 +297,11 @@ LambdaDoom/
 │   ├── Dockerfile          #   compiles pinned SDL2 + Chocolate Doom, verifies WAD SHA256
 │   ├── rootfs/opt/capsule/ #   start.sh, run_app.sh, focus.py, *_ws.py
 │   └── app/                # optional WAD override drop zone (gitignored)
-├── rs-cli/                 # the Rust `ldoom` CLI (shipped prebuilt; build only if you want)
+├── rs-cli/                 # the Rust `hellbox` CLI (shipped prebuilt; build only if you want)
 │   ├── Cargo.toml  Makefile
 │   └── src/                #   main, config, state, aws, poll, browser, proxy, commands/
 └── docs/                   # architecture, security, ground truth, media, generalizing
 ```
 
-LambdaDoom depends on the official `aws-sdk-lambdamicrovms` crate from crates.io. The capsule
+Hellbox depends on the official `aws-sdk-lambdamicrovms` crate from crates.io. The capsule
 pins and SHA256-verifies every external tarball/WAD it downloads during the image build.

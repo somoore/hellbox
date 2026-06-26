@@ -24,12 +24,12 @@ pub async fn run(name: &str, app: Option<&str>, capsule_dir_override: Option<&st
 
     let capsule_dir = capsule_dir(capsule_dir_override)?;
     if let Some(app) = app {
-        tracing::info!(target: "ldoom::build", "note: --app {app} — ensure it's staged under capsule/app/");
+        tracing::info!(target: "hellbox::build", "note: --app {app} — ensure it's staged under capsule/app/");
     }
 
     let zip_path = zip_context(&capsule_dir)
         .with_context(|| format!("zipping build context at {}", capsule_dir.display()))?;
-    tracing::info!(target: "ldoom::build", "built context zip at {}", zip_path.display());
+    tracing::info!(target: "hellbox::build", "built context zip at {}", zip_path.display());
 
     let key = format!("contexts/{name}.zip");
     let bytes = std::fs::read(&zip_path).context("reading context zip")?;
@@ -43,7 +43,7 @@ pub async fn run(name: &str, app: Option<&str>, capsule_dir_override: Option<&st
         .await
         .with_context(|| format!("uploading s3://{}/{key}", cfg.artifact_bucket))?;
     let code_artifact_uri = format!("s3://{}/{}", cfg.artifact_bucket, key);
-    tracing::info!(target: "ldoom::build", "uploaded {code_artifact_uri}");
+    tracing::info!(target: "hellbox::build", "uploaded {code_artifact_uri}");
 
     let hooks = Hooks::builder()
         .port(HOOK_PORT)
@@ -81,7 +81,7 @@ pub async fn run(name: &str, app: Option<&str>, capsule_dir_override: Option<&st
         .await
         .context("create_microvm_image")?;
     let image_arn = created.image_arn().to_string();
-    tracing::info!(target: "ldoom::build", "image creating: {image_arn} (state {})", created.state().as_str());
+    tracing::info!(target: "hellbox::build", "image creating: {image_arn} (state {})", created.state().as_str());
 
     state.upsert(name, |c| {
         c.image_arn = Some(image_arn.clone());
@@ -142,7 +142,7 @@ fn capsule_dir(override_path: Option<&str>) -> Result<PathBuf> {
     };
     if !dir.is_dir() {
         bail!(
-            "no capsule dir at {} — run `ldoom build` from the LambdaDoom repo root, \
+            "no capsule dir at {} — run `hellbox build` from the Hellbox repo root, \
              or pass --capsule-dir <PATH>",
             dir.display()
         );
@@ -155,11 +155,11 @@ fn client_token(name: &str) -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    format!("ldoom-build-{name}-{secs}")
+    format!("hellbox-build-{name}-{secs}")
 }
 
 fn zip_context(dir: &Path) -> Result<PathBuf> {
-    let out_path = std::env::temp_dir().join(format!("ldoom-context-{}.zip", std::process::id()));
+    let out_path = std::env::temp_dir().join(format!("hellbox-context-{}.zip", std::process::id()));
     let file = std::fs::File::create(&out_path)
         .with_context(|| format!("creating {}", out_path.display()))?;
     let mut zip = zip::ZipWriter::new(file);
@@ -219,7 +219,7 @@ mod tests {
     impl Scratch {
         fn new(tag: &str) -> Self {
             let p = std::env::temp_dir().join(format!(
-                "ldoom-buildtest-{tag}-{}-{:p}",
+                "hellbox-buildtest-{tag}-{}-{:p}",
                 std::process::id(),
                 &tag as *const _
             ));

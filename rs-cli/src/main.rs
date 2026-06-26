@@ -15,7 +15,7 @@ mod proxy;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "ldoom", version, about)]
+#[command(name = "hellbox", version, about)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -82,7 +82,7 @@ enum Cmd {
 enum ConfigAction {
     /// Print all current settings.
     Show,
-    /// Set a setting, e.g. `ldoom config set display h264`.
+    /// Set a setting, e.g. `hellbox config set display h264`.
     Set { key: String, value: String },
     /// Clear an optional setting back to its default/off.
     Unset { key: String },
@@ -97,7 +97,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "ldoom=info,lambdadoom=info,info".into()),
+                .unwrap_or_else(|_| "hellbox=info,info".into()),
         )
         .init();
 

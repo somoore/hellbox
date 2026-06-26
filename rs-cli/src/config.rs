@@ -10,6 +10,10 @@ pub const DEFAULT_AUDIO_PORT: i32 = 6902;
 pub const DEFAULT_VIDEO_PORT: i32 = 6903;
 pub const DEFAULT_INPUT_PORT: i32 = 6904;
 pub const DEFAULT_REGION: &str = "us-east-1";
+const HELLBOX_HOME_ENV: &str = "HELLBOX_HOME";
+const LEGACY_HOME_ENV: &str = "LAMBDADOOM_HOME";
+const HELLBOX_DIR_NAME: &str = ".hellbox";
+const LEGACY_DIR_NAME: &str = ".lambdadoom";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -87,12 +91,75 @@ impl Config {
 }
 
 pub fn hellbox_dir() -> Result<PathBuf> {
-    if let Ok(dir) = std::env::var("HELLBOX_HOME")
-        && !dir.trim().is_empty()
-    {
-        return Ok(PathBuf::from(dir));
+    if let Some(dir) = env_path(HELLBOX_HOME_ENV) {
+        return Ok(dir);
+    }
+    if let Some(dir) = env_path(LEGACY_HOME_ENV) {
+        return Ok(dir);
     }
     let dirs =
         directories::BaseDirs::new().context("could not resolve home directory for ~/.hellbox")?;
-    Ok(dirs.home_dir().join(".hellbox"))
+    Ok(default_home_dir(dirs.home_dir()))
+}
+
+fn env_path(name: &str) -> Option<PathBuf> {
+    std::env::var(name)
+        .ok()
+        .filter(|dir| !dir.trim().is_empty())
+        .map(PathBuf::from)
+}
+
+fn default_home_dir(home: &std::path::Path) -> PathBuf {
+    let current = home.join(HELLBOX_DIR_NAME);
+    let legacy = home.join(LEGACY_DIR_NAME);
+    if !current.exists() && legacy.exists() {
+        legacy
+    } else {
+        current
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch_home(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "hellbox-configtest-{tag}-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn default_home_dir_uses_new_dir_for_fresh_installs() {
+        let home = scratch_home("fresh");
+
+        assert_eq!(default_home_dir(&home), home.join(HELLBOX_DIR_NAME));
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn default_home_dir_reads_legacy_dir_for_upgrades() {
+        let home = scratch_home("legacy");
+        std::fs::create_dir(home.join(LEGACY_DIR_NAME)).unwrap();
+
+        assert_eq!(default_home_dir(&home), home.join(LEGACY_DIR_NAME));
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn default_home_dir_prefers_existing_new_dir() {
+        let home = scratch_home("both");
+        std::fs::create_dir(home.join(HELLBOX_DIR_NAME)).unwrap();
+        std::fs::create_dir(home.join(LEGACY_DIR_NAME)).unwrap();
+
+        assert_eq!(default_home_dir(&home), home.join(HELLBOX_DIR_NAME));
+        let _ = std::fs::remove_dir_all(home);
+    }
 }

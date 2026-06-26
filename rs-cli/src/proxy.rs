@@ -582,6 +582,9 @@ fn expected_forward_path(path: &str) -> bool {
         || path.starts_with("/hellbox/audio")
         || path.starts_with("/hellbox/video")
         || path.starts_with("/hellbox/input")
+        || path.starts_with("/ldoom/audio")
+        || path.starts_with("/ldoom/video")
+        || path.starts_with("/ldoom/input")
         || path.starts_with("/app/")
         || path.starts_with("/core/")
         || path.starts_with("/vendor/")
@@ -1013,6 +1016,9 @@ mod tests {
                 ("/hellbox/audio".into(), 6902),
                 ("/hellbox/video".into(), 6903),
                 ("/hellbox/input".into(), 6904),
+                ("/ldoom/audio".into(), 6902),
+                ("/ldoom/video".into(), 6903),
+                ("/ldoom/input".into(), 6904),
             ],
             activity: None,
             control: None,
@@ -1128,6 +1134,8 @@ mod tests {
         assert!(expected_forward_path("/"));
         assert!(expected_forward_path("/hellbox/video"));
         assert!(expected_forward_path("/hellbox/input/ev"));
+        assert!(expected_forward_path("/ldoom/video"));
+        assert!(expected_forward_path("/ldoom/input/ev"));
         assert!(expected_forward_path("/websockify"));
         assert!(expected_forward_path("/core/rfb.js"));
         assert!(!expected_forward_path("/__hellbox/state"));
@@ -1149,6 +1157,8 @@ mod tests {
         let c = cfg();
         assert_eq!(c.port_for("/hellbox/audio"), 6902);
         assert_eq!(c.port_for("/hellbox/audio?x=1"), 6902);
+        assert_eq!(c.port_for("/ldoom/audio"), 6902);
+        assert_eq!(c.port_for("/ldoom/audio?x=1"), 6902);
         assert_eq!(c.port_for("/"), 6901);
         assert_eq!(c.port_for("/websockify"), 6901);
         assert_eq!(c.port_for("/vnc.html"), 6901);
@@ -1161,6 +1171,10 @@ mod tests {
         assert_eq!(c.port_for("/hellbox/video?x=1"), 6903);
         assert_eq!(c.port_for("/hellbox/input"), 6904);
         assert_eq!(c.port_for("/hellbox/input/ev"), 6904);
+        assert_eq!(c.port_for("/ldoom/video"), 6903);
+        assert_eq!(c.port_for("/ldoom/video?x=1"), 6903);
+        assert_eq!(c.port_for("/ldoom/input"), 6904);
+        assert_eq!(c.port_for("/ldoom/input/ev"), 6904);
         assert_eq!(c.port_for("/"), 6901);
     }
 

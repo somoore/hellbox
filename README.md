@@ -2,6 +2,8 @@
 
 # LambdaDoom
 
+[![Rust Report Card](https://rust-reportcard.xuri.me/badge/github.com/somoore/lambdadoom)](https://rust-reportcard.xuri.me/report/github.com/somoore/lambdadoom)
+
 ### DOOM inside an AWS Lambda MicroVM.
 
 Suspend it mid firefight and the compute bill stops. Resume it and you are back on the exact

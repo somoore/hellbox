@@ -1,10 +1,10 @@
-# LambdaDoom `ldoom` CLI — build helpers.
+# Hellbox `hellbox` CLI — build helpers.
 #
 # Most people never need this: `./deploy.sh` downloads a prebuilt binary. Build from
 # source only if you want to. The proxy/open path needs the `proxy` feature.
 #
-# Run the built binary from the REPO ROOT (one level up) so `ldoom build` finds ./capsule:
-#   make release && (cd .. && rs-cli/target/release/ldoom build --name doom)
+# Run the built binary from the REPO ROOT (one level up) so `hellbox build` finds ./capsule:
+#   make release && (cd .. && rs-cli/target/release/hellbox build --name doom)
 
 FEATURES ?= proxy
 
@@ -13,7 +13,7 @@ FEATURES ?= proxy
 build:        ## Debug build (with the proxy feature)
 	cargo build --features $(FEATURES)
 
-release:      ## Optimized build -> target/release/ldoom
+release:      ## Optimized build -> target/release/hellbox
 	cargo build --release --features $(FEATURES)
 
 test:         ## Run the unit tests

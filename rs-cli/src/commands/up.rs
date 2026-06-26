@@ -23,7 +23,7 @@ pub async fn run(name: &str) -> Result<()> {
             .clone()
             .or_else(|| capsule.image_version.clone())
             .with_context(|| {
-                format!("capsule '{name}' has no image yet — run `ldoom build` first")
+                format!("capsule '{name}' has no image yet — run `hellbox build` first")
             })?
     };
 
@@ -43,7 +43,7 @@ pub async fn run(name: &str) -> Result<()> {
         .idle_policy(idle_policy)
         .maximum_duration_in_seconds(MAX_DURATION_SECS)
         // Unique per run; deterministic tokens can resurrect terminated responses.
-        .client_token(format!("ldoom-up-{name}-{}", now_secs()));
+        .client_token(format!("hellbox-up-{name}-{}", now_secs()));
     if !cfg.ingress_connector_arn.trim().is_empty() {
         req = req.ingress_network_connectors(cfg.ingress_connector_arn.clone());
     }
@@ -56,7 +56,7 @@ pub async fn run(name: &str) -> Result<()> {
 
     let run = req.send().await.context("run_microvm")?;
     let microvm_id = run.microvm_id().to_string();
-    tracing::info!(target: "ldoom::up", "launched {microvm_id} (state {})", run.state().as_str());
+    tracing::info!(target: "hellbox::up", "launched {microvm_id} (state {})", run.state().as_str());
 
     state.upsert(name, |c| {
         c.microvm_id = Some(microvm_id.clone());

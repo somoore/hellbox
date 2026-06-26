@@ -1,9 +1,9 @@
 # Third-party notices
 
-This file summarizes third-party software and assets used by LambdaDoom. It is a practical
+This file summarizes third-party software and assets used by Hellbox. It is a practical
 notice index, not legal advice and not a substitute for reviewing the upstream license texts.
 
-LambdaDoom's original source code is licensed under Apache-2.0. Third-party components remain
+Hellbox's original source code is licensed under Apache-2.0. Third-party components remain
 under their own licenses.
 
 ## Summary
@@ -19,7 +19,7 @@ under their own licenses.
 | SDL2_mixer | Built into the generated MicroVM image | `2.8.0` | zlib-style permissive | Preserve upstream license notice. |
 | SDL2_net | Built into the generated MicroVM image | `2.2.0` | zlib-style permissive | Preserve upstream license notice. |
 | Shareware `DOOM1.WAD` | Downloaded at image build time unless the user supplies a WAD | Pinned file from `nneonneo/universal-doom` | Third-party game data | Not Apache-2.0. Do not distribute retail DOOM WADs or imply user-supplied WADs are covered by this repo's license. |
-| Rust crates | Linked into the prebuilt `ldoom` CLI | Locked in `rs-cli/Cargo.lock` | Mostly permissive; `option-ext` is MPL-2.0 | Checked by `cargo-deny`; see `deny.toml`. |
+| Rust crates | Linked into the prebuilt `hellbox` CLI | Locked in `rs-cli/Cargo.lock` | Mostly permissive; `option-ext` is MPL-2.0 | Checked by `cargo-deny`; see `deny.toml`. |
 | Python wheels | Installed into the generated MicroVM image | Pinned in `capsule/requirements.txt` | Mixed permissive/MPL/LGPL package licenses | Preserve package license texts when distributing image artifacts. |
 | Amazon Linux / MicroVM base image and DNF packages | Base and OS packages in the generated MicroVM image | `public.ecr.aws/lambda/microvms:al2023-minimal` plus packages installed in `capsule/Dockerfile` | Mixed OS package licenses | For production image distribution, generate a full package bill of materials from the built image. |
 
@@ -38,11 +38,11 @@ under their own licenses.
 
 ## Distribution notes
 
-For source-only releases of this repo, the root [LICENSE](LICENSE) covers LambdaDoom's original
+For source-only releases of this repo, the root [LICENSE](LICENSE) covers Hellbox's original
 code. The third-party components above are fetched or built later and remain under their own
 licenses.
 
-For prebuilt `ldoom` CLI releases, include Rust dependency notices if you publish formal binary
+For prebuilt `hellbox` CLI releases, include Rust dependency notices if you publish formal binary
 distributions.
 
 For distributed MicroVM/container/image artifacts, treat the image as a third-party software

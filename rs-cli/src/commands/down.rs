@@ -22,7 +22,7 @@ pub async fn run(name: &str) -> Result<()> {
         .send()
         .await
         .context("terminate_microvm")?;
-    tracing::info!(target: "ldoom::down", "terminated {microvm_id}");
+    tracing::info!(target: "hellbox::down", "terminated {microvm_id}");
 
     state.upsert(name, |c| {
         c.microvm_id = None;

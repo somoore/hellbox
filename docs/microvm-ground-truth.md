@@ -1,11 +1,11 @@
 # Lambda MicroVMs: verified ground truth
 
 The facts below were verified against the live AWS Lambda MicroVMs service while
-building LambdaDoom. They are the load-bearing details: get one wrong and a build
+building Hellbox. They are the load-bearing details: get one wrong and a build
 fails or a request 403s. This is a working reference, not the official docs; check
 the AWS docs for anything not listed here.
 
-> **New-service warning:** these details were verified live while building LambdaDoom. Re-check
+> **New-service warning:** these details were verified live while building Hellbox. Re-check
 > them against AWS docs before using this as a general Lambda MicroVM reference.
 
 ## Endpoint and signing
@@ -20,7 +20,7 @@ the AWS docs for anything not listed here.
 
 - A data-plane request needs a JWE auth token in the **`X-aws-proxy-auth` header**.
   The same token in a query string returns **403**. Browsers cannot set that header,
-  which is why `ldoom open` runs a local header-injecting proxy (see architecture.md).
+  which is why `hellbox open` runs a local header-injecting proxy (see architecture.md).
 - Select the internal port with the **`X-aws-proxy-port` header** (or the WebSocket
   subprotocol `lambda-microvms.port.<N>`).
 - Mint a token with `CreateMicrovmAuthToken` (`POST .../microvms/{id}/auth-token`):
@@ -45,7 +45,7 @@ the AWS docs for anything not listed here.
   resume), not by hitting the endpoint.
 - **Suspended duration:** configure `IdlePolicy.suspendedDurationSeconds` at 8 hours or
   less. The live API may accept larger values, but AWS public copy describes suspended
-  state as preserved "for up to 8 hours", so LambdaDoom follows that public contract.
+  state as preserved "for up to 8 hours", so Hellbox follows that public contract.
 
 ## Lifecycle hooks (the #1 build-failure source)
 
@@ -74,7 +74,7 @@ the AWS docs for anything not listed here.
 
 ## ARM64 and the Graviton fleet
 
-The MicroVM fleet runs on AWS Graviton (a mix of generations). LambdaDoom runs DOOM as a
+The MicroVM fleet runs on AWS Graviton (a mix of generations). Hellbox runs DOOM as a
 **native aarch64** build, so it executes directly on the ARM CPU with no translation layer
 and renders reliably on every host. Run native ARM code; if you need something that is not
 native ARM, validate it across Graviton generations, not just across regions.

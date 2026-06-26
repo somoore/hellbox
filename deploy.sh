@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# LambdaDoom one-command deploy.
+# Hellbox one-command deploy.
 #
 #   ./deploy.sh
 #
-# Env: AWS_REGION, LAMBDADOOM_STACK, LAMBDADOOM_NAME, LAMBDADOOM_REPO,
-# LAMBDADOOM_VERSION, LAMBDADOOM_SKIP_ATTESTATION=1, LDOOM_BIN.
+# Env: AWS_REGION, HELLBOX_STACK, HELLBOX_NAME, HELLBOX_REPO,
+# HELLBOX_VERSION, HELLBOX_SKIP_ATTESTATION=1, HELLBOX_BIN.
 set -euo pipefail
 
-STACK="${LAMBDADOOM_STACK:-LambdaDoom}"
+STACK="${HELLBOX_STACK:-Hellbox}"
 REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
-NAME="${LAMBDADOOM_NAME:-doom}"
-REPO="${LAMBDADOOM_REPO:-somoore/LambdaDoom}"
-VERSION="${LAMBDADOOM_VERSION:-latest}"
-HOME_DIR="${LAMBDADOOM_HOME:-$HOME/.lambdadoom}"
+NAME="${HELLBOX_NAME:-doom}"
+REPO="${HELLBOX_REPO:-somoore/Hellbox}"
+VERSION="${HELLBOX_VERSION:-latest}"
+HOME_DIR="${HELLBOX_HOME:-$HOME/.hellbox}"
 BIN_DIR="$HOME_DIR/bin"
 
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -50,7 +50,7 @@ sha256_file(){
 # This guards against truncated/corrupt downloads, NOT tampering. The cryptographic
 # trust anchor is verify_attestation (GitHub build provenance), which is bound to the
 # release workflow identity and cannot be forged by replacing release files. To avoid
-# trusting any prebuilt artifact, build from source and pass LDOOM_BIN.
+# trusting any prebuilt artifact, build from source and pass HELLBOX_BIN.
 verify_sha256(){
   local file sumfile expected actual
   file="$1"; sumfile="$2"
@@ -63,14 +63,14 @@ verify_sha256(){
 verify_attestation(){
   local file
   file="$1"
-  if [ "${LAMBDADOOM_SKIP_ATTESTATION:-0}" = "1" ]; then
+  if [ "${HELLBOX_SKIP_ATTESTATION:-0}" = "1" ]; then
     [ "$VERSION" != "latest" ] \
-      || die "LAMBDADOOM_SKIP_ATTESTATION=1 requires a pinned LAMBDADOOM_VERSION, not latest"
+      || die "HELLBOX_SKIP_ATTESTATION=1 requires a pinned HELLBOX_VERSION, not latest"
     warn "skipping GitHub artifact attestation verification for pinned release $VERSION"
     return
   fi
   command -v gh >/dev/null 2>&1 \
-    || die "gh is required to verify GitHub artifact attestation for $(basename "$file") (install gh, build from source with LDOOM_BIN, or set LAMBDADOOM_SKIP_ATTESTATION=1 with a pinned LAMBDADOOM_VERSION)"
+    || die "gh is required to verify GitHub artifact attestation for $(basename "$file") (install gh, build from source with HELLBOX_BIN, or set HELLBOX_SKIP_ATTESTATION=1 with a pinned HELLBOX_VERSION)"
   gh attestation verify "$file" --repo "$REPO" \
     --signer-workflow "github.com/$REPO/.github/workflows/release.yml" >/dev/null \
     || die "GitHub artifact attestation verification failed for $(basename "$file")"
@@ -100,24 +100,24 @@ download_release_asset(){
     gh release download "$rel" --repo "$REPO" --pattern "$asset" --output "$out" --clobber \
       || die "could not download $asset from $REPO ($rel)"
   else
-    die "could not download $url — is the repo public and a release published? (or set LDOOM_BIN=/path/to/ldoom)"
+    die "could not download $url — is the repo public and a release published? (or set HELLBOX_BIN=/path/to/hellbox)"
   fi
 }
 
 # Resolve CLI: override -> cache -> local release build -> release download.
 resolve_doom(){
-  if [ -n "${LDOOM_BIN:-}" ]; then printf '%s' "$LDOOM_BIN"; return; fi
-  if [ -x "$BIN_DIR/ldoom$ext" ] && [ -f "$BIN_DIR/ldoom$ext.sha256" ]; then
-    verify_sha256 "$BIN_DIR/ldoom$ext" "$BIN_DIR/ldoom$ext.sha256"
-    verify_attestation "$BIN_DIR/ldoom$ext"
-    printf '%s' "$BIN_DIR/ldoom$ext"
+  if [ -n "${HELLBOX_BIN:-}" ]; then printf '%s' "$HELLBOX_BIN"; return; fi
+  if [ -x "$BIN_DIR/hellbox$ext" ] && [ -f "$BIN_DIR/hellbox$ext.sha256" ]; then
+    verify_sha256 "$BIN_DIR/hellbox$ext" "$BIN_DIR/hellbox$ext.sha256"
+    verify_attestation "$BIN_DIR/hellbox$ext"
+    printf '%s' "$BIN_DIR/hellbox$ext"
     return
   fi
-  if [ -x "rs-cli/target/release/ldoom$ext" ]; then printf '%s' "$(pwd)/rs-cli/target/release/ldoom$ext"; return; fi
-  local asset rel tmp_bin tmp_sum; asset="ldoom-$(detect_target)$ext"
+  if [ -x "rs-cli/target/release/hellbox$ext" ]; then printf '%s' "$(pwd)/rs-cli/target/release/hellbox$ext"; return; fi
+  local asset rel tmp_bin tmp_sum; asset="hellbox-$(detect_target)$ext"
   rel="$(resolve_release_tag)"
   [ -n "$rel" ] || die "could not resolve release tag for $REPO"
-  say "Downloading the ldoom CLI: $asset ($rel)"
+  say "Downloading the hellbox CLI: $asset ($rel)"
   mkdir -p "$BIN_DIR"
   tmp_bin="$BIN_DIR/$asset"
   tmp_sum="$BIN_DIR/$asset.sha256"
@@ -126,12 +126,12 @@ resolve_doom(){
   verify_sha256 "$tmp_bin" "$tmp_sum"
   say "Verified SHA256 for $asset"
   verify_attestation "$tmp_bin"
-  [ "${LAMBDADOOM_SKIP_ATTESTATION:-0}" = "1" ] \
+  [ "${HELLBOX_SKIP_ATTESTATION:-0}" = "1" ] \
     || say "Verified GitHub artifact attestation for $asset"
-  mv "$tmp_bin" "$BIN_DIR/ldoom$ext"
-  mv "$tmp_sum" "$BIN_DIR/ldoom$ext.sha256"
-  chmod +x "$BIN_DIR/ldoom$ext"
-  printf '%s' "$BIN_DIR/ldoom$ext"
+  mv "$tmp_bin" "$BIN_DIR/hellbox$ext"
+  mv "$tmp_sum" "$BIN_DIR/hellbox$ext.sha256"
+  chmod +x "$BIN_DIR/hellbox$ext"
+  printf '%s' "$BIN_DIR/hellbox$ext"
 }
 
 # Preflight.
@@ -174,7 +174,7 @@ say "Wrote $HOME_DIR/config.toml"
 
 # CLI.
 DOOM="$(resolve_doom)"
-say "Using ldoom CLI: $DOOM"
+say "Using hellbox CLI: $DOOM"
 
 # Build, launch, open.
 say "Building the DOOM MicroVM image  (compiles the engine + fetches the WAD; a few minutes)"

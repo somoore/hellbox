@@ -23,7 +23,7 @@ pub async fn run(name: &str) -> Result<()> {
         .send()
         .await
         .context("resume_microvm")?;
-    tracing::info!(target: "ldoom::resume", "resuming {microvm_id}");
+    tracing::info!(target: "hellbox::resume", "resuming {microvm_id}");
 
     await_running(&aws.microvm, &mut state, name, &microvm_id).await?;
 

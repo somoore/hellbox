@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Remove LambdaDoom resources and local state.
+# Remove Hellbox resources and local state.
 #
 #   ./uninstall.sh
 set -uo pipefail
 
-STACK="${LAMBDADOOM_STACK:-LambdaDoom}"
+STACK="${HELLBOX_STACK:-Hellbox}"
 REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
-NAME="${LAMBDADOOM_NAME:-doom}"
-HOME_DIR="${LAMBDADOOM_HOME:-$HOME/.lambdadoom}"
+NAME="${HELLBOX_NAME:-doom}"
+HOME_DIR="${HELLBOX_HOME:-$HOME/.hellbox}"
 
 say(){ printf '\n\033[1;36m==>\033[0m %s\n' "$*"; }
 warn(){ printf '\033[1;33mwarning:\033[0m %s\n' "$*" >&2; }
@@ -19,9 +19,9 @@ if [ -f "$HOME_DIR/config.toml" ]; then
   [ -n "$r" ] && REGION="$r"
 fi
 
-# Locate ldoom for MicroVM cleanup.
+# Locate hellbox for MicroVM cleanup.
 DOOM=""
-for c in "${LDOOM_BIN:-}" "$HOME_DIR/bin/ldoom" "$HOME_DIR/bin/ldoom.exe" "rs-cli/target/release/ldoom" "rs-cli/target/release/ldoom.exe"; do
+for c in "${HELLBOX_BIN:-}" "$HOME_DIR/bin/hellbox" "$HOME_DIR/bin/hellbox.exe" "rs-cli/target/release/hellbox" "rs-cli/target/release/hellbox.exe"; do
   [ -n "$c" ] && [ -x "$c" ] && { DOOM="$c"; break; }
 done
 
@@ -30,7 +30,7 @@ if [ -n "$DOOM" ]; then
   say "Removing the DOOM microvm + image"
   "$DOOM" rm --name "$NAME" || say "(nothing to remove, or already gone)"
 else
-  say "ldoom CLI not found — skipping microvm/image cleanup (delete the image manually if one exists)"
+  say "hellbox CLI not found — skipping microvm/image cleanup (delete the image manually if one exists)"
 fi
 
 # Stack.
@@ -62,4 +62,4 @@ if [ "$FAILED" = 1 ]; then
   warn "uninstall finished with errors — verify in the AWS console that the stack, bucket, and any MicroVM/image are gone (they may still incur cost)."
   exit 1
 fi
-say "LambdaDoom removed. Delete your clone of the repo if you no longer need it."
+say "Hellbox removed. Delete your clone of the repo if you no longer need it."

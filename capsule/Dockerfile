@@ -1,4 +1,4 @@
-# LambdaDoom capsule: native aarch64 Chocolate Doom streamed to the browser.
+# Hellbox capsule: native aarch64 Chocolate Doom streamed to the browser.
 FROM public.ecr.aws/lambda/microvms:al2023-minimal
 
 ARG FFMPEG_RELEASE=autobuild-2026-06-26-13-36

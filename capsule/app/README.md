@@ -1,6 +1,6 @@
 # `capsule/app/`: game data (optional)
 
-LambdaDoom runs the **shareware `DOOM1.WAD`**, which `ldoom build` fetches automatically at
+Hellbox runs the **shareware `DOOM1.WAD`**, which `hellbox build` fetches automatically at
 build time and bakes into the MicroVM image. For the default demo this directory can be
 **empty**, you do not need to supply anything.
 
@@ -11,7 +11,7 @@ Drop a file here only to **override or extend** the game data:
 - Add **PWADs** or other assets alongside it to mod the demo.
 
 Payloads are git-ignored (`*.wad`, `*.exe`, `*.dll`, …; see `.gitignore`), so no game data
-lands in the repo. By default, LambdaDoom downloads the shareware `DOOM1.WAD` and builds
+lands in the repo. By default, Hellbox downloads the shareware `DOOM1.WAD` and builds
 GPLv2 Chocolate Doom at build time; it does not include or distribute the retail `DOOM.WAD` /
 `DOOM2.WAD`. See
 [LEGAL.md](../../LEGAL.md).

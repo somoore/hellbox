@@ -1,6 +1,6 @@
 # Security
 
-LambdaDoom is single user and deploys into your own account. You run the `ldoom` CLI, it
+Hellbox is single user and deploys into your own account. You run the `hellbox` CLI, it
 provisions resources in your AWS account, and only you connect to the stream. It is not a
 multi-tenant service and is not hardened as one. This is the honest threat model.
 
@@ -10,8 +10,8 @@ multi-tenant service and is not hardened as one. This is the honest threat model
 flowchart LR
     subgraph LOCAL["Your machine"]
         BROWSER["browser tab"]
-        PROXY["ldoom proxy<br/>127.0.0.1:6080"]
-        CLI["ldoom CLI<br/>AWS credentials"]
+        PROXY["hellbox proxy<br/>127.0.0.1:6080"]
+        CLI["hellbox CLI<br/>AWS credentials"]
         BROWSER <-->|HTTP/WS on loopback| PROXY
     end
 
@@ -38,9 +38,9 @@ flowchart LR
 - **The browser never sees the token.** The proxy injects it server side, so it cannot leak
   into page JavaScript, history, or logs.
 - **Loopback-only proxy.** It binds `127.0.0.1`, not your LAN or the internet.
-- **Hardened control endpoints.** `/__lambdadoom/{state,suspend,resume}` drive the control
+- **Hardened control endpoints.** `/__hellbox/{state,suspend,resume}` drive the control
   plane with your credentials, so they require a loopback `Host`, a loopback `Origin` when
-  present, an HttpOnly per-session `ldoom_control` cookie, and `POST` for `suspend` and
+  present, an HttpOnly per-session `hellbox_control` cookie, and `POST` for `suspend` and
   `resume`. A cross-origin, DNS-rebound, or blind local request gets a 403. See
   `is_loopback_authority` and `cookie_has_control_secret` in `rs-cli/src/proxy.rs` and their
   tests.
@@ -55,22 +55,22 @@ flowchart LR
 The parts I deliberately left out of scope:
 
 - **A local process running as you** can reach `127.0.0.1:6080` directly, since it is not
-  bound by same-origin policy. The per-session `ldoom_control` cookie blocks blind calls to
+  bound by same-origin policy. The per-session `hellbox_control` cookie blocks blind calls to
   the control endpoints, but a same-user process that can scrape the browser session or proxy
   traffic is still out of scope: a process running as you already owns your shell and
   credentials. Those endpoints only suspend, resume, or read state for the one MicroVM you own,
   so the worst case is freezing or thawing your own game.
 - **Your AWS credentials live on your machine** (via Granted, SSO, or environment variables),
   as with any AWS CLI or SDK use. They are never committed, and `.gitignore` excludes `.env`,
-  `*.pem`, `*.key`, `aws-credentials*`, and `~/.lambdadoom/`. The binary reads credentials
-  through the standard AWS chain and never writes them; `~/.lambdadoom/` holds only non-secret
+  `*.pem`, `*.key`, `aws-credentials*`, and `~/.hellbox/`. The binary reads credentials
+  through the standard AWS chain and never writes them; `~/.hellbox/` holds only non-secret
   config and capsule state.
-- **The prebuilt binary is a supply-chain dependency.** `deploy.sh` downloads `ldoom` from this
-  repo's [GitHub Releases](https://github.com/somoore/LambdaDoom/releases), verifies the
+- **The prebuilt binary is a supply-chain dependency.** `deploy.sh` downloads `hellbox` from this
+  repo's [GitHub Releases](https://github.com/somoore/Hellbox/releases), verifies the
   release SHA256 sidecar, and verifies the GitHub artifact attestation when `gh` is available.
   Release builds are produced by the [release workflow](../.github/workflows/release.yml) from
   this source. To avoid trusting a prebuilt artifact, build it yourself (`cd rs-cli && make
-  release`) and point `deploy.sh` at it with `LDOOM_BIN`. The binary runs locally with your
+  release`) and point `deploy.sh` at it with `HELLBOX_BIN`. The binary runs locally with your
   credentials, so only run a release you trust.
 - **Entropy after a snapshot.** A resumed MicroVM replays frozen entropy, so a CSPRNG seeded
   before the snapshot repeats its output. AWS terminates TLS, so the hop inside the MicroVM is
@@ -80,7 +80,7 @@ The parts I deliberately left out of scope:
   Lambda-managed defaults (JWE-authenticated ingress, internet egress). The MicroVM can reach
   the internet; it does not need to (the WAD and engine are baked at build time), but it is not
   network-isolated by default. **To lock egress down,** set `egress_connector_arn` in
-  `~/.lambdadoom/config.toml` to a connector that denies all outbound — `ldoom up` wires any
+  `~/.hellbox/config.toml` to a connector that denies all outbound — `hellbox up` wires any
   non-empty `egress_connector_arn` into `RunMicrovm` (see `up.rs`; leave it empty for the
   managed default). The runtime MicroVM needs no outbound, so a deny-all egress connector is
   safe.
@@ -94,6 +94,6 @@ owner directly rather than posting a public exploit.
 
 ## Legal and scope
 
-LambdaDoom does not include or distribute retail DOOM game assets. By default, the build process
+Hellbox does not include or distribute retail DOOM game assets. By default, the build process
 downloads the shareware `DOOM1.WAD` and builds Chocolate Doom at image build time. See
 [LEGAL.md](../LEGAL.md) for the full legal notice.

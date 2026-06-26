@@ -28,8 +28,8 @@ use crate::state::State;
 
 const AUTH_TOKEN_KEY: &str = "X-aws-proxy-auth";
 const TOKEN_TTL_MINUTES: i32 = 30;
-const CONTROL_COOKIE_NAME: &str = "ldoom_control";
-const CONTROL_COOKIE_PREFIX: &str = "ldoom_control=";
+const CONTROL_COOKIE_NAME: &str = "hellbox_control";
+const CONTROL_COOKIE_PREFIX: &str = "hellbox_control=";
 
 #[cfg(test)]
 const AUTH_HEADER: &str = "x-aws-proxy-auth";
@@ -126,7 +126,7 @@ pub async fn start(cfg: ProxyConfig) -> Result<String> {
     let cfg = Arc::new(cfg);
 
     tracing::info!(
-        target: "ldoom::proxy",
+        target: "hellbox::proxy",
         "Fork B loopback proxy on {local} -> https://{} (port {}, header-injecting)",
         cfg.upstream.host(), cfg.upstream_port
     );
@@ -136,11 +136,11 @@ pub async fn start(cfg: ProxyConfig) -> Result<String> {
             let (stream, peer) = match listener.accept().await {
                 Ok(v) => v,
                 Err(e) => {
-                    tracing::warn!(target: "ldoom::proxy", "accept failed: {e:#}");
+                    tracing::warn!(target: "hellbox::proxy", "accept failed: {e:#}");
                     break;
                 }
             };
-            tracing::debug!(target: "ldoom::proxy", "accepted {peer}");
+            tracing::debug!(target: "hellbox::proxy", "accepted {peer}");
             let cfg = cfg.clone();
             let client = client.clone();
             tokio::spawn(async move {
@@ -151,7 +151,7 @@ pub async fn start(cfg: ProxyConfig) -> Result<String> {
                     .with_upgrades()
                     .await
                 {
-                    tracing::debug!(target: "ldoom::proxy", "connection closed: {e:#}");
+                    tracing::debug!(target: "hellbox::proxy", "connection closed: {e:#}");
                 }
             });
         }
@@ -175,7 +175,7 @@ async fn handle(
         handle_http(req, cfg, client).await
     };
     Ok(result.unwrap_or_else(|e| {
-        tracing::warn!(target: "ldoom::proxy", "proxy error: {e:#}");
+        tracing::warn!(target: "hellbox::proxy", "proxy error: {e:#}");
         Response::builder()
             .status(StatusCode::BAD_GATEWAY)
             .body(Full::new(Bytes::from_static(b"proxy error")))
@@ -314,7 +314,7 @@ async fn handle_http(
         );
         if let Some(ctrl) = &cfg.control {
             let cookie = format!(
-                "ldoom_control={}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400",
+                "hellbox_control={}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400",
                 ctrl.control_secret
             );
             if let Ok(v) = HeaderValue::from_str(&cookie) {
@@ -382,7 +382,7 @@ async fn handle_ws(req: Request<Incoming>, cfg: Arc<ProxyConfig>) -> Result<Resp
                 .await;
                 pump(browser_ws, upstream_ws).await;
             }
-            Err(e) => tracing::warn!(target: "ldoom::proxy", "browser upgrade failed: {e:#}"),
+            Err(e) => tracing::warn!(target: "hellbox::proxy", "browser upgrade failed: {e:#}"),
         }
         if let Some(a) = &activity {
             a.leave();
@@ -447,7 +447,7 @@ where
         _ = b2u => {}
         _ = u2b => {}
     }
-    tracing::debug!(target: "ldoom::proxy", "WS session closed");
+    tracing::debug!(target: "hellbox::proxy", "WS session closed");
 }
 
 fn is_websocket_upgrade(headers: &HeaderMap) -> bool {
@@ -579,9 +579,9 @@ fn expected_forward_path(path: &str) -> bool {
         || path == "/vnc.html"
         || path == "/websockify"
         || path == "/favicon.ico"
-        || path.starts_with("/ldoom/audio")
-        || path.starts_with("/ldoom/video")
-        || path.starts_with("/ldoom/input")
+        || path.starts_with("/hellbox/audio")
+        || path.starts_with("/hellbox/video")
+        || path.starts_with("/hellbox/input")
         || path.starts_with("/app/")
         || path.starts_with("/core/")
         || path.starts_with("/vendor/")
@@ -651,7 +651,7 @@ fn html_response(body: String) -> Response<Full<Bytes>> {
 fn html_response_with_control_secret(body: String, secret: &str) -> Response<Full<Bytes>> {
     let mut resp = html_response(body);
     let cookie =
-        format!("ldoom_control={secret}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400");
+        format!("hellbox_control={secret}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400");
     if let Ok(v) = HeaderValue::from_str(&cookie) {
         resp.headers_mut().insert(hyper::header::SET_COOKIE, v);
     }
@@ -683,7 +683,7 @@ async fn handle_control(
     };
     // Local control calls use the user's AWS creds; require loopback metadata.
     if !loopback_metadata_ok(req.headers()) {
-        tracing::warn!(target: "ldoom::proxy", "rejected control request (non-loopback Host or Origin)");
+        tracing::warn!(target: "hellbox::proxy", "rejected control request (non-loopback Host or Origin)");
         return Ok(json_response(
             StatusCode::FORBIDDEN,
             r#"{"error":"control endpoints are loopback-only"}"#.to_string(),
@@ -691,7 +691,7 @@ async fn handle_control(
     }
 
     if !has_local_session(req.headers(), &ctrl.control_secret) {
-        tracing::warn!(target: "ldoom::proxy", "rejected control request (missing/invalid local session secret)");
+        tracing::warn!(target: "hellbox::proxy", "rejected control request (missing/invalid local session secret)");
         return Ok(json_response(
             StatusCode::FORBIDDEN,
             r#"{"error":"missing local session secret"}"#.to_string(),
@@ -727,7 +727,7 @@ async fn handle_control(
             format!(r#"{{"state":{}}}"#, json_str(&state)),
         ),
         Err(e) => {
-            tracing::warn!(target: "ldoom::proxy", "control {action} failed: {e:#}");
+            tracing::warn!(target: "hellbox::proxy", "control {action} failed: {e:#}");
             json_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!(r#"{{"error":{}}}"#, json_str(&format!("{e:#}"))),
@@ -741,7 +741,7 @@ async fn current_state(ctrl: &ProxyControl) -> Result<String> {
 }
 
 async fn do_suspend(ctrl: &ProxyControl) -> Result<String> {
-    tracing::info!(target: "ldoom::proxy", "browser requested suspend of {}", ctrl.microvm_id);
+    tracing::info!(target: "hellbox::proxy", "browser requested suspend of {}", ctrl.microvm_id);
     ctrl.microvm
         .suspend_microvm()
         .microvm_identifier(&ctrl.microvm_id)
@@ -754,7 +754,7 @@ async fn do_suspend(ctrl: &ProxyControl) -> Result<String> {
 }
 
 async fn do_resume(ctrl: &ProxyControl) -> Result<String> {
-    tracing::info!(target: "ldoom::proxy", "browser requested resume of {}", ctrl.microvm_id);
+    tracing::info!(target: "hellbox::proxy", "browser requested resume of {}", ctrl.microvm_id);
     ctrl.microvm
         .resume_microvm()
         .microvm_identifier(&ctrl.microvm_id)
@@ -767,7 +767,7 @@ async fn do_resume(ctrl: &ProxyControl) -> Result<String> {
         let token = mint_token(ctrl).await?;
         ctrl.upstream.set(host.clone(), token);
         record_endpoint(&ctrl.name, &state, &host);
-        tracing::info!(target: "ldoom::proxy", "resumed {} — endpoint+token refreshed", ctrl.microvm_id);
+        tracing::info!(target: "hellbox::proxy", "resumed {} — endpoint+token refreshed", ctrl.microvm_id);
     } else {
         record_state(&ctrl.name, &state);
     }
@@ -833,7 +833,7 @@ fn json_str(s: &str) -> String {
 }
 
 fn control_action(path: &str) -> Option<String> {
-    path.strip_prefix("/__lambdadoom/").map(str::to_string)
+    path.strip_prefix("/__hellbox/").map(str::to_string)
 }
 
 fn cookie_has_control_secret(cookie: &str, secret: &str) -> bool {
@@ -869,7 +869,7 @@ fn control_only_page() -> String {
 
 const CONTROL_ONLY_PAGE: &str = r##"<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>LambdaDoom — paused</title>
+<title>Hellbox — paused</title>
 <style>
 :root{--bg:#0A0B0D;--text:#ECE8DF;--muted:#8B919B;--muted2:#7E848E;
   --ember:#FF6B1A;--ember2:#FF8A3D;--green:#57C77E;--amber:#FFB020;--hairline:#23272E;
@@ -881,10 +881,7 @@ body{display:flex;flex-direction:column;align-items:center;justify-content:cente
   background:radial-gradient(80% 60% at 50% 42%,rgba(255,107,26,.06) 0%,rgba(0,0,0,0) 60%),var(--bg);
   color:var(--text);font-family:var(--font-ui)}
 .brand{position:fixed;top:20px;left:24px;display:flex;align-items:center;gap:12px}
-.mark{display:flex;align-items:center;justify-content:center;width:36px;height:30px;border-radius:8px;
-  color:#1A0E06;font-weight:900;font-size:15px;letter-spacing:-.04em;
-  background:linear-gradient(150deg,var(--ember2),var(--ember) 55%,#D9480F);
-  box-shadow:0 0 0 1px rgba(255,138,61,.35),0 4px 14px rgba(255,107,26,.3)}
+.mark{display:flex;align-items:center;justify-content:center;width:34px;height:34px;flex-shrink:0}
 .word{display:flex;align-items:baseline;gap:1px;font-size:16px;letter-spacing:.01em}
 .word .dim{font-weight:600;color:#9CA1AB}.word .strong{font-weight:900;color:var(--text)}
 .badge{display:flex;align-items:center;justify-content:center;width:64px;height:64px;border-radius:16px;
@@ -903,7 +900,7 @@ body{display:flex;flex-direction:column;align-items:center;justify-content:cente
 .note{display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:12px;color:var(--muted2)}
 </style></head>
 <body>
-  <div class="brand"><div class="mark">&#955;D</div><div class="word"><span class="dim">LAMBDA</span><span class="strong">DOOM</span></div></div>
+  <div class="brand"><div class="mark"><svg width="32" height="32" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="hbf" x1="20" y1="3" x2="20" y2="26" gradientUnits="userSpaceOnUse"><stop stop-color="#FFD23D"/><stop offset=".45" stop-color="#FF8A3D"/><stop offset="1" stop-color="#FF6B1A"/></linearGradient></defs><path d="M20 4 C23.5 9.5 21.5 13 23 16 C25 14.5 25 11.5 25 11.5 C27.5 15 27.5 19.5 24.5 22 C22.8 23.4 21.2 24 20 24 C18.8 24 17.2 23.4 15.5 22 C12.5 19.5 13 15 15.5 12.5 C15.5 15 16.5 15.5 17.5 14.5 C16.8 10.5 17 7.5 20 4 Z" fill="url(#hbf)"/><path d="M13 23 C11 20 12.5 17.5 12 15.5 C13.8 16.8 13.8 18.5 13.8 18.5 C15 16 14 14 15.5 12.5 C15 16.5 16.5 18 15.5 21 Z" fill="url(#hbf)" opacity=".85"/><path d="M27 23 C29 20.5 27.8 18 28.2 16 C26.6 17.2 26.6 18.8 26.6 18.8 C25.6 16.5 26.4 14.5 25 13 C25.4 16.6 24 18 25 21 Z" fill="url(#hbf)" opacity=".85"/><path d="M7.5 24.5 H32.5 L30 36 H10 Z" fill="#1B1E24"/><rect x="6" y="22.5" width="28" height="3.4" rx="1.5" fill="#2A2F37"/><path d="M14 26.5 L13 34 M20 26.5 V34 M26 26.5 L27 34" stroke="#FF6B1A" stroke-width="1.2" opacity=".45" stroke-linecap="round"/><circle cx="13.5" cy="37.5" r="1.7" fill="#2A2F37"/><circle cx="26.5" cy="37.5" r="1.7" fill="#2A2F37"/></svg></div><div class="word"><span class="dim">HELL</span><span class="strong">BOX</span></div></div>
   <div class="badge"><svg width="26" height="26" viewBox="0 0 24 24" fill="#FF6B1A"><rect x="6" y="5" width="4" height="14" rx="1.2"/><rect x="14" y="5" width="4" height="14" rx="1.2"/></svg></div>
   <div class="chip"><span id="dot"></span><b id="status">Checking&#8230;</b></div>
   <h2 id="head">Session suspended</h2>
@@ -927,7 +924,7 @@ function paint(s){
   else{dot.style.background='#888';status.textContent=s||'…';btn.textContent='…';btn.disabled=true;}
 }
 function poll(){if(busy)return;
-  fetch('/__lambdadoom/state').then(function(r){return r.json();})
+  fetch('/__hellbox/state').then(function(r){return r.json();})
     .then(function(j){if(j.state)paint(j.state);})
     .catch(function(){status.textContent='proxy offline';dot.style.background='#888';});}
 btn.onclick=function(){
@@ -935,7 +932,7 @@ btn.onclick=function(){
   var act=cur==='RUNNING'?'suspend':cur==='SUSPENDED'?'resume':null;if(!act)return;
   busy=true;btn.disabled=true;dot.style.background='#58a6ff';
   status.textContent=act==='suspend'?'suspending…':'resuming…';
-  fetch('/__lambdadoom/'+act,{method:'POST'}).then(function(r){return r.json();})
+  fetch('/__hellbox/'+act,{method:'POST'}).then(function(r){return r.json();})
     .then(function(j){busy=false;
       if(act==='resume'&&j.state==='RUNNING'){status.textContent='resumed · loading…';
         setTimeout(function(){var u=new URL(location.href);u.searchParams.set('resumed','1');location.href=u.toString();},700);return;}
@@ -947,22 +944,22 @@ poll();setInterval(poll,3000);
 
 /// Injected Suspend/Resume panel.
 const CONTROL_PANEL: &str = r##"
-<div id="ldoom-ctl" style="position:fixed;bottom:16px;right:16px;z-index:2147483647;
+<div id="hellbox-ctl" style="position:fixed;bottom:16px;right:16px;z-index:2147483647;
   font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;color:#ECE8DF;
   background:rgba(9,10,13,.74);border:1px solid #1F232A;border-radius:12px;padding:8px 8px 8px 14px;
   display:flex;gap:12px;align-items:center;box-shadow:0 12px 34px rgba(0,0,0,.5)">
-  <span id="ldoom-dot" style="width:8px;height:8px;border-radius:50%;flex-shrink:0;
+  <span id="hellbox-dot" style="width:8px;height:8px;border-radius:50%;flex-shrink:0;
     background:#888;display:inline-block"></span>
-  <span id="ldoom-status" style="font-size:13px;font-weight:600;letter-spacing:.01em;white-space:nowrap">…</span>
-  <button id="ldoom-btn" style="font-family:inherit;font-size:13px;font-weight:600;
+  <span id="hellbox-status" style="font-size:13px;font-weight:600;letter-spacing:.01em;white-space:nowrap">…</span>
+  <button id="hellbox-btn" style="font-family:inherit;font-size:13px;font-weight:600;
     padding:0 14px;height:34px;cursor:pointer;border-radius:8px;border:1px solid #2C313A;
     background:#15181D;color:#ECE8DF;white-space:nowrap" disabled>…</button>
 </div>
 <script>
 (function(){
-  var dot=document.getElementById('ldoom-dot');
-  var st=document.getElementById('ldoom-status');
-  var btn=document.getElementById('ldoom-btn');
+  var dot=document.getElementById('hellbox-dot');
+  var st=document.getElementById('hellbox-status');
+  var btn=document.getElementById('hellbox-btn');
   var busy=false, cur='';
   function paint(state){
     cur=state;
@@ -975,7 +972,7 @@ const CONTROL_PANEL: &str = r##"
   }
   function poll(){
     if(busy)return;
-    fetch('/__lambdadoom/state').then(function(r){return r.json();})
+    fetch('/__hellbox/state').then(function(r){return r.json();})
       .then(function(j){if(j.state)paint(j.state);}).catch(function(){});
   }
   btn.onclick=function(){
@@ -984,7 +981,7 @@ const CONTROL_PANEL: &str = r##"
     if(!act)return;
     busy=true;btn.disabled=true;dot.style.background='#58a6ff';
     st.textContent=act==='suspend'?'Suspending…':'Resuming…';
-    fetch('/__lambdadoom/'+act,{method:'POST'}).then(function(r){return r.json();})
+    fetch('/__hellbox/'+act,{method:'POST'}).then(function(r){return r.json();})
       .then(function(j){
         busy=false;
         if(act==='resume'&&j.state==='RUNNING'){
@@ -1013,9 +1010,9 @@ mod tests {
             upstream_port: 6901,
             local_port: 0,
             routes: vec![
-                ("/ldoom/audio".into(), 6902),
-                ("/ldoom/video".into(), 6903),
-                ("/ldoom/input".into(), 6904),
+                ("/hellbox/audio".into(), 6902),
+                ("/hellbox/video".into(), 6903),
+                ("/hellbox/input".into(), 6904),
             ],
             activity: None,
             control: None,
@@ -1027,8 +1024,8 @@ mod tests {
         let html = Bytes::from("<html><body><h1>hi</h1></body></html>");
         let out = inject_panel(&html);
         let s = std::str::from_utf8(&out).unwrap();
-        assert!(s.contains("ldoom-ctl"), "panel markup injected");
-        let panel_at = s.find("ldoom-ctl").unwrap();
+        assert!(s.contains("hellbox-ctl"), "panel markup injected");
+        let panel_at = s.find("hellbox-ctl").unwrap();
         let body_at = s.find("</body>").unwrap();
         let h1_at = s.find("<h1>hi</h1>").unwrap();
         assert!(
@@ -1046,12 +1043,12 @@ mod tests {
             s.starts_with("<div>no body tag</div>"),
             "original content kept"
         );
-        assert!(s.contains("ldoom-ctl"), "panel appended when no </body>");
+        assert!(s.contains("hellbox-ctl"), "panel appended when no </body>");
     }
 
     #[test]
     fn injected_panel_drives_control_endpoints() {
-        assert!(CONTROL_PANEL.contains("/__lambdadoom/state"), "polls state");
+        assert!(CONTROL_PANEL.contains("/__hellbox/state"), "polls state");
         assert!(CONTROL_PANEL.contains("method:'POST'"), "POSTs the action");
         assert!(CONTROL_PANEL.contains("'Suspend'"), "offers Suspend");
         assert!(CONTROL_PANEL.contains("'Resume'"), "offers Resume");
@@ -1061,7 +1058,7 @@ mod tests {
     fn control_only_page_offers_resume() {
         let page = control_only_page();
         assert!(page.contains("Resume game"), "has a Resume control");
-        assert!(page.contains("/__lambdadoom/state"), "polls live state");
+        assert!(page.contains("/__hellbox/state"), "polls live state");
         assert!(
             page.contains("resumed"),
             "reconnects after resume (reloads with ?resumed=1)"
@@ -1076,34 +1073,37 @@ mod tests {
     }
 
     #[test]
-    fn control_paths_accept_lambdadoom_namespace() {
-        assert_eq!(control_action("/__lambdadoom/state").unwrap(), "state");
-        assert_eq!(control_action("/__lambdadoom/suspend").unwrap(), "suspend");
+    fn control_paths_accept_hellbox_namespace() {
+        assert_eq!(control_action("/__hellbox/state").unwrap(), "state");
+        assert_eq!(control_action("/__hellbox/suspend").unwrap(), "suspend");
         assert!(control_action("/not-control/state").is_none());
     }
 
     #[test]
     fn control_secret_cookie_must_match() {
         assert!(cookie_has_control_secret(
-            "foo=bar; ldoom_control=abc123; theme=dark",
+            "foo=bar; hellbox_control=abc123; theme=dark",
             "abc123"
         ));
-        assert!(!cookie_has_control_secret("ldoom_control=wrong", "abc123"));
+        assert!(!cookie_has_control_secret(
+            "hellbox_control=wrong",
+            "abc123"
+        ));
         assert!(!cookie_has_control_secret("other=abc123", "abc123"));
     }
 
     #[test]
     fn strips_local_control_cookie_before_forwarding() {
         assert_eq!(
-            strip_control_cookie("foo=bar; ldoom_control=abc123; theme=dark").as_deref(),
+            strip_control_cookie("foo=bar; hellbox_control=abc123; theme=dark").as_deref(),
             Some("foo=bar; theme=dark")
         );
-        assert_eq!(strip_control_cookie("ldoom_control=abc123"), None);
+        assert_eq!(strip_control_cookie("hellbox_control=abc123"), None);
 
         let mut inbound = HeaderMap::new();
         inbound.insert(
             "cookie",
-            HeaderValue::from_static("foo=bar; ldoom_control=abc123"),
+            HeaderValue::from_static("foo=bar; hellbox_control=abc123"),
         );
         let out = build_upstream_headers(&inbound, "the.secret.jwe", 6901);
         assert_eq!(out.get("cookie").unwrap(), "foo=bar");
@@ -1126,11 +1126,11 @@ mod tests {
     #[test]
     fn forwarded_paths_are_limited_to_stream_and_novnc_assets() {
         assert!(expected_forward_path("/"));
-        assert!(expected_forward_path("/ldoom/video"));
-        assert!(expected_forward_path("/ldoom/input/ev"));
+        assert!(expected_forward_path("/hellbox/video"));
+        assert!(expected_forward_path("/hellbox/input/ev"));
         assert!(expected_forward_path("/websockify"));
         assert!(expected_forward_path("/core/rfb.js"));
-        assert!(!expected_forward_path("/__lambdadoom/state"));
+        assert!(!expected_forward_path("/__hellbox/state"));
         assert!(!expected_forward_path("/random/admin"));
     }
 
@@ -1147,8 +1147,8 @@ mod tests {
     #[test]
     fn routes_audio_path_to_audio_port() {
         let c = cfg();
-        assert_eq!(c.port_for("/ldoom/audio"), 6902);
-        assert_eq!(c.port_for("/ldoom/audio?x=1"), 6902);
+        assert_eq!(c.port_for("/hellbox/audio"), 6902);
+        assert_eq!(c.port_for("/hellbox/audio?x=1"), 6902);
         assert_eq!(c.port_for("/"), 6901);
         assert_eq!(c.port_for("/websockify"), 6901);
         assert_eq!(c.port_for("/vnc.html"), 6901);
@@ -1157,10 +1157,10 @@ mod tests {
     #[test]
     fn routes_video_and_input_paths() {
         let c = cfg();
-        assert_eq!(c.port_for("/ldoom/video"), 6903);
-        assert_eq!(c.port_for("/ldoom/video?x=1"), 6903);
-        assert_eq!(c.port_for("/ldoom/input"), 6904);
-        assert_eq!(c.port_for("/ldoom/input/ev"), 6904);
+        assert_eq!(c.port_for("/hellbox/video"), 6903);
+        assert_eq!(c.port_for("/hellbox/video?x=1"), 6903);
+        assert_eq!(c.port_for("/hellbox/input"), 6904);
+        assert_eq!(c.port_for("/hellbox/input/ev"), 6904);
         assert_eq!(c.port_for("/"), 6901);
     }
 

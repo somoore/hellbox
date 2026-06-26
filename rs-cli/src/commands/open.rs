@@ -20,7 +20,7 @@ pub async fn run(name: &str, no_open: bool) -> Result<()> {
     let capsule = state.require(name)?;
 
     let microvm_id = capsule.microvm_id.clone().with_context(|| {
-        format!("capsule '{name}' isn't running — `ldoom up --name {name}` first")
+        format!("capsule '{name}' isn't running — `hellbox up --name {name}` first")
     })?;
     let endpoint = capsule
         .endpoint
@@ -55,7 +55,7 @@ pub async fn run(name: &str, no_open: bool) -> Result<()> {
             .unwrap_or_default(),
         Err(e) => {
             tracing::warn!(
-                target: "ldoom::open",
+                target: "hellbox::open",
                 "could not mint auth token (capsule may be suspended): {e:#} — \
                  starting control-only proxy; click Resume in the tab to thaw"
             );
@@ -133,9 +133,9 @@ async fn open_fork_b(args: OpenForkBArgs<'_>) -> Result<()> {
         upstream_port: port,
         local_port: 6080,
         routes: vec![
-            ("/ldoom/audio".to_string(), audio_port),
-            ("/ldoom/video".to_string(), video_port),
-            ("/ldoom/input".to_string(), input_port),
+            ("/hellbox/audio".to_string(), audio_port),
+            ("/hellbox/video".to_string(), video_port),
+            ("/hellbox/input".to_string(), input_port),
         ],
         activity: Some(activity.clone()),
         control: Some(control),
@@ -156,7 +156,7 @@ async fn open_fork_b(args: OpenForkBArgs<'_>) -> Result<()> {
         base_url
     };
 
-    tracing::info!(target: "ldoom::open", "Fork B proxy serving {url} (auth header injected; JWE <redacted>)");
+    tracing::info!(target: "hellbox::open", "Fork B proxy serving {url} (auth header injected; JWE <redacted>)");
     if no_open {
         println!("Fork B proxy ready: {url}  (--no-open: not launching browser)");
     } else {
@@ -166,7 +166,7 @@ async fn open_fork_b(args: OpenForkBArgs<'_>) -> Result<()> {
 
     if idle_minutes > 0 {
         println!("auto-suspend: will freeze '{name}' after {idle_minutes} idle min with no viewer");
-        tracing::info!(target: "ldoom::open", "Fork B proxy running; Ctrl-C to stop (auto-suspend after {idle_minutes} idle min)");
+        tracing::info!(target: "hellbox::open", "Fork B proxy running; Ctrl-C to stop (auto-suspend after {idle_minutes} idle min)");
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {}
             _ = idle_monitor(activity, idle_minutes) => {
@@ -174,7 +174,7 @@ async fn open_fork_b(args: OpenForkBArgs<'_>) -> Result<()> {
             }
         }
     } else {
-        tracing::info!(target: "ldoom::open", "Fork B proxy running; Ctrl-C to stop");
+        tracing::info!(target: "hellbox::open", "Fork B proxy running; Ctrl-C to stop");
         tokio::signal::ctrl_c().await.ok();
     }
     Ok(())
@@ -204,7 +204,7 @@ async fn idle_monitor(activity: std::sync::Arc<crate::proxy::ProxyActivity>, idl
 #[cfg(feature = "proxy")]
 async fn suspend_idle(aws: &Aws, microvm_id: &str, name: &str) -> Result<()> {
     use anyhow::Context;
-    tracing::info!(target: "ldoom::open", "idle timeout reached — auto-suspending {microvm_id}");
+    tracing::info!(target: "hellbox::open", "idle timeout reached — auto-suspending {microvm_id}");
     aws.microvm
         .suspend_microvm()
         .microvm_identifier(microvm_id)
@@ -215,7 +215,7 @@ async fn suspend_idle(aws: &Aws, microvm_id: &str, name: &str) -> Result<()> {
         let _ = st.upsert(name, |c| c.state = Some("SUSPENDING".to_string()));
     }
     println!(
-        "auto-suspended '{name}' after idle timeout — cost saved. `ldoom resume --name {name}` to thaw."
+        "auto-suspended '{name}' after idle timeout — cost saved. `hellbox resume --name {name}` to thaw."
     );
     Ok(())
 }
@@ -244,7 +244,7 @@ async fn open_fork_b(args: OpenForkBArgs<'_>) -> Result<()> {
         args.idle_minutes,
     );
     anyhow::bail!(
-        "ldoom open requires the `proxy` feature (Fork B loopback proxy), which is \
+        "hellbox open requires the `proxy` feature (Fork B loopback proxy), which is \
          on by default. Rebuild without `--no-default-features`."
     )
 }

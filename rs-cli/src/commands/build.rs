@@ -167,11 +167,25 @@ fn zip_context(dir: &Path) -> Result<PathBuf> {
         .compression_method(zip::CompressionMethod::Deflated)
         .unix_permissions(0o755);
 
+    // follow_links(false) (the default) yields symlinks as symlink entries rather
+    // than recursing/following them, so path_is_symlink() can catch them below.
     for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
         let path = entry.path();
         let rel = path.strip_prefix(dir).context("relativizing zip entry")?;
         if rel.as_os_str().is_empty() {
             continue;
+        }
+        // SECURITY: fail closed on symlinks. std::fs::read() follows a file symlink,
+        // so a symlink inside the capsule (e.g. -> ~/.aws/credentials) would package
+        // the TARGET's bytes into the zip and upload them to S3 in the build context.
+        // The capsule legitimately contains none, so reject rather than follow.
+        if entry.path_is_symlink() {
+            bail!(
+                "refusing to build: capsule contains a symlink ({}). Symlinks are not \
+                 packaged (their targets could exfiltrate local files into the cloud \
+                 build context). Remove it or replace it with a real file.",
+                rel.display()
+            );
         }
         let name = rel
             .components()
@@ -193,4 +207,59 @@ fn zip_context(dir: &Path) -> Result<PathBuf> {
     }
     zip.finish().context("finalizing zip")?;
     Ok(out_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Unique scratch dir under the system temp, cleaned up on drop. Avoids a
+    // tempfile dev-dependency for one test.
+    struct Scratch(PathBuf);
+    impl Scratch {
+        fn new(tag: &str) -> Self {
+            let p = std::env::temp_dir().join(format!(
+                "ldoom-buildtest-{tag}-{}-{:p}",
+                std::process::id(),
+                &tag as *const _
+            ));
+            std::fs::create_dir_all(&p).unwrap();
+            Scratch(p)
+        }
+    }
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn zip_context_packages_normal_files() {
+        let s = Scratch::new("normal");
+        std::fs::write(s.0.join("a.txt"), b"hello").unwrap();
+        std::fs::create_dir(s.0.join("sub")).unwrap();
+        std::fs::write(s.0.join("sub/b.txt"), b"world").unwrap();
+        let zip = zip_context(&s.0).expect("normal capsule should package");
+        assert!(zip.exists(), "zip produced");
+        let _ = std::fs::remove_file(zip);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn zip_context_rejects_symlinks() {
+        let s = Scratch::new("symlink");
+        // A secret outside the capsule the symlink would exfiltrate.
+        let secret = s.0.join("outside_secret");
+        std::fs::write(&secret, b"AWS_SECRET").unwrap();
+        let cap = s.0.join("capsule");
+        std::fs::create_dir(&cap).unwrap();
+        std::fs::write(cap.join("real.txt"), b"ok").unwrap();
+        std::os::unix::fs::symlink(&secret, cap.join("link.txt")).unwrap();
+
+        let err = zip_context(&cap).expect_err("symlink must be rejected");
+        assert!(
+            err.to_string().contains("symlink"),
+            "error names the symlink: {err}"
+        );
+    }
 }

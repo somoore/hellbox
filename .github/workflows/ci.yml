@@ -64,7 +64,9 @@ jobs:
               - '**/requirements*.txt'
               - '**/package.json'
               - 'deny.toml'
+              - '.pre-commit-config.yaml'
               - 'scripts/check-deps.sh'
+              - 'scripts/check-precommit-pins.sh'
             cfn:
               - '.github/workflows/ci.yml'
               - 'deploy/**'
@@ -92,6 +94,10 @@ jobs:
           fetch-depth: 0
       - name: Verify all workflow actions are SHA-pinned
         run: scripts/check-action-pins.sh
+      - name: Verify pre-commit hooks are SHA-pinned
+        run: scripts/check-precommit-pins.sh
+      - name: Verify release provenance binding
+        run: scripts/check-release-provenance.sh
       - name: Install gitleaks
         run: |
           VER=8.30.1
@@ -154,6 +160,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Shellcheck scripts
         run: git ls-files '*.sh' | xargs shellcheck
+      - name: Check uninstall deletion safety
+        run: scripts/check-uninstall-safety.sh
 
   cloudformation:
     name: cfn-lint
@@ -231,6 +239,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Pre-commit hook pin gate
+        run: scripts/check-precommit-pins.sh
       - name: Pin/hash gate
         run: scripts/check-deps.sh
 

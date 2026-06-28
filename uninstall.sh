@@ -11,6 +11,7 @@ LEGACY_HOME_DIR="${LAMBDADOOM_HOME:-$HOME/.lambdadoom}"
 say(){ printf '\n\033[1;36m==>\033[0m %s\n' "$*"; }
 warn(){ printf '\033[1;33mwarning:\033[0m %s\n' "$*" >&2; }
 FAILED=0
+SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
 home_specs=("hellbox|$HELLBOX_HOME_DIR|${HELLBOX_NAME:-doom}")
 if { [ -z "${HELLBOX_HOME:-}" ] || [ -n "${LAMBDADOOM_HOME:-}" ]; } && [ "$LEGACY_HOME_DIR" != "$HELLBOX_HOME_DIR" ]; then
@@ -84,6 +85,83 @@ cli_for_home(){
   done
 }
 
+canonical_dir(){
+  local d="$1"
+  [ -d "$d" ] || return 1
+  (cd "$d" 2>/dev/null && pwd -P)
+}
+
+path_is_same_or_parent(){
+  local parent="$1" child="$2"
+  [ "$parent" = "$child" ] && return 0
+  case "$child" in
+    "$parent"/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+home_has_marker(){
+  local d="$1"
+  if [ -f "$d/config.toml" ] \
+    && grep -qE '^[[:space:]]*artifact_bucket[[:space:]]*=' "$d/config.toml" \
+    && grep -qE '^[[:space:]]*execution_role_arn[[:space:]]*=' "$d/config.toml"; then
+    return 0
+  fi
+  return 1
+}
+
+remove_local_home(){
+  local d="$1" display="$1" resolved home_resolved
+  if [ -z "$d" ]; then
+    warn "refusing to remove an empty local-state path"
+    return 1
+  fi
+  if [ ! -e "$d" ]; then
+    say "Local state not found, skipping: $display"
+    return 0
+  fi
+  if [ -L "$d" ]; then
+    warn "refusing to remove symlinked local-state path: $display"
+    return 1
+  fi
+  if [ ! -d "$d" ]; then
+    warn "refusing to remove non-directory local-state path: $display"
+    return 1
+  fi
+  if ! resolved="$(canonical_dir "$d")"; then
+    warn "refusing to remove unresolvable local-state path: $display"
+    return 1
+  fi
+  if [ -z "$resolved" ] || [ "$resolved" = "/" ]; then
+    warn "refusing to remove dangerous local-state path: $display"
+    return 1
+  fi
+  home_resolved="$(canonical_dir "$HOME" 2>/dev/null || true)"
+  if [ -n "$home_resolved" ] && path_is_same_or_parent "$resolved" "$home_resolved"; then
+    if [ "$resolved" = "$home_resolved" ]; then
+      warn "refusing to remove the user's home directory: $display"
+    else
+      warn "refusing to remove a parent of the user's home directory: $display"
+    fi
+    return 1
+  fi
+  if path_is_same_or_parent "$resolved" "$SCRIPT_ROOT"; then
+    if [ "$resolved" = "$SCRIPT_ROOT" ]; then
+      warn "refusing to remove the repository root: $display"
+    else
+      warn "refusing to remove a parent of the repository root: $display"
+    fi
+    return 1
+  fi
+  if ! home_has_marker "$resolved"; then
+    warn "refusing to remove $display: no Hellbox config marker found"
+    return 1
+  fi
+
+  say "Removing $resolved  (binary, config, state)"
+  rm -rf -- "$resolved"
+}
+
 # Stop a running loopback proxy (`hellbox open`) if one is still up — uninstall
 # should be self-contained whether or not the user Ctrl-C'd it first. Targets only
 # the hellbox proxy by command pattern; harmless if none is running.
@@ -155,8 +233,14 @@ fi
 # Local state.
 for spec in "${home_specs[@]}"; do
   IFS='|' read -r _ d _ <<<"$spec"
-  say "Removing $d  (binary, config, state)"
-  rm -rf "$d"
+  if ! remove_local_home "$d"; then
+    FAILED=1
+  fi
 done
+
+if [ "$FAILED" = 1 ]; then
+  warn "uninstall refused to remove one or more local-state paths; inspect the warnings above."
+  exit 1
+fi
 
 say "Hellbox removed. Delete your clone of the repo if you no longer need it."

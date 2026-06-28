@@ -49,8 +49,8 @@ sha256_file(){
 # as the binary, so an attacker who can swap the asset can swap its sidecar too.
 # This guards against truncated/corrupt downloads, NOT tampering. The cryptographic
 # trust anchor is verify_attestation (GitHub build provenance), which is bound to the
-# release workflow identity and cannot be forged by replacing release files. To avoid
-# trusting any prebuilt artifact, build from source and pass HELLBOX_BIN.
+# release workflow identity and the expected release tag source ref. To avoid trusting
+# any prebuilt artifact, build from source and pass HELLBOX_BIN.
 verify_sha256(){
   local file sumfile expected actual
   file="$1"; sumfile="$2"
@@ -61,8 +61,9 @@ verify_sha256(){
 }
 
 verify_attestation(){
-  local file
+  local file rel source_ref
   file="$1"
+  rel="${2:-}"
   if [ "${HELLBOX_SKIP_ATTESTATION:-0}" = "1" ]; then
     [ "$VERSION" != "latest" ] \
       || die "HELLBOX_SKIP_ATTESTATION=1 requires a pinned HELLBOX_VERSION, not latest"
@@ -71,8 +72,12 @@ verify_attestation(){
   fi
   command -v gh >/dev/null 2>&1 \
     || die "gh is required to verify GitHub artifact attestation for $(basename "$file") (install gh, build from source with HELLBOX_BIN, or set HELLBOX_SKIP_ATTESTATION=1 with a pinned HELLBOX_VERSION)"
+  [ -n "$rel" ] || rel="$(resolve_release_tag)"
+  [ -n "$rel" ] || die "could not resolve release tag for attestation verification"
+  source_ref="refs/tags/$rel"
   gh attestation verify "$file" --repo "$REPO" \
-    --signer-workflow "github.com/$REPO/.github/workflows/release.yml" >/dev/null \
+    --signer-workflow "github.com/$REPO/.github/workflows/release.yml" \
+    --source-ref "$source_ref" >/dev/null \
     || die "GitHub artifact attestation verification failed for $(basename "$file")"
 }
 
@@ -125,7 +130,7 @@ resolve_hellbox(){
   download_release_asset "$rel" "$asset.sha256" "$tmp_sum"
   verify_sha256 "$tmp_bin" "$tmp_sum"
   say "Verified SHA256 for $asset"
-  verify_attestation "$tmp_bin"
+  verify_attestation "$tmp_bin" "$rel"
   [ "${HELLBOX_SKIP_ATTESTATION:-0}" = "1" ] \
     || say "Verified GitHub artifact attestation for $asset"
   mv "$tmp_bin" "$BIN_DIR/hellbox$ext"

@@ -27,12 +27,12 @@ pub async fn run(name: &str, app: Option<&str>, capsule_dir_override: Option<&st
         tracing::info!(target: "hellbox::build", "note: --app {app} — ensure it's staged under capsule/app/");
     }
 
-    let zip_path = zip_context(&capsule_dir)
+    let context_zip = zip_context(&capsule_dir)
         .with_context(|| format!("zipping build context at {}", capsule_dir.display()))?;
-    tracing::info!(target: "hellbox::build", "built context zip at {}", zip_path.display());
+    tracing::info!(target: "hellbox::build", "built context zip at {}", context_zip.path().display());
 
     let key = format!("contexts/{name}.zip");
-    let bytes = std::fs::read(&zip_path).context("reading context zip")?;
+    let bytes = std::fs::read(context_zip.path()).context("reading context zip")?;
     let aws = Aws::new(&cfg).await?;
     aws.s3
         .put_object()
@@ -42,6 +42,7 @@ pub async fn run(name: &str, app: Option<&str>, capsule_dir_override: Option<&st
         .send()
         .await
         .with_context(|| format!("uploading s3://{}/{key}", cfg.artifact_bucket))?;
+    drop(context_zip);
     let code_artifact_uri = format!("s3://{}/{}", cfg.artifact_bucket, key);
     tracing::info!(target: "hellbox::build", "uploaded {code_artifact_uri}");
 
@@ -158,10 +159,27 @@ fn client_token(name: &str) -> String {
     format!("hellbox-build-{name}-{secs}")
 }
 
-fn zip_context(dir: &Path) -> Result<PathBuf> {
-    let out_path = std::env::temp_dir().join(format!("hellbox-context-{}.zip", std::process::id()));
-    let file = std::fs::File::create(&out_path)
-        .with_context(|| format!("creating {}", out_path.display()))?;
+#[derive(Debug)]
+struct ContextZip {
+    path: PathBuf,
+    dir: PathBuf,
+}
+
+impl ContextZip {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for ContextZip {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+        let _ = std::fs::remove_dir(&self.dir);
+    }
+}
+
+fn zip_context(dir: &Path) -> Result<ContextZip> {
+    let (context_zip, file) = create_context_zip_file()?;
     let mut zip = zip::ZipWriter::new(file);
     let opts = SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated)
@@ -197,6 +215,7 @@ fn zip_context(dir: &Path) -> Result<PathBuf> {
             zip.add_directory(format!("{name}/"), opts)
                 .with_context(|| format!("adding dir {name}"))?;
         } else {
+            validate_zip_file_entry(path, rel)?;
             zip.start_file(&name, opts)
                 .with_context(|| format!("adding file {name}"))?;
             let data =
@@ -206,7 +225,98 @@ fn zip_context(dir: &Path) -> Result<PathBuf> {
         }
     }
     zip.finish().context("finalizing zip")?;
-    Ok(out_path)
+    Ok(context_zip)
+}
+
+fn create_context_zip_file() -> Result<(ContextZip, std::fs::File)> {
+    let root = std::env::temp_dir();
+    for _ in 0..100 {
+        let dir = root.join(format!("hellbox-context-{}", random_context_suffix()?));
+        match create_private_dir(&dir) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => {
+                return Err(err).with_context(|| format!("creating {}", dir.display()));
+            }
+        }
+
+        let path = dir.join("context.zip");
+        match create_private_file(&path) {
+            Ok(file) => return Ok((ContextZip { path, dir }, file)),
+            Err(err) => {
+                let _ = std::fs::remove_dir(&dir);
+                return Err(err).with_context(|| format!("creating {}", path.display()));
+            }
+        }
+    }
+
+    bail!("could not create a unique temporary context zip path")
+}
+
+fn random_context_suffix() -> Result<String> {
+    let mut bytes = [0_u8; 16];
+    getrandom::fill(&mut bytes).context("generating random context zip path")?;
+    Ok(format!("{:032x}", u128::from_le_bytes(bytes)))
+}
+
+#[cfg(unix)]
+fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+
+    std::fs::DirBuilder::new().mode(0o700).create(dir)
+}
+
+#[cfg(not(unix))]
+fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir(dir)
+}
+
+#[cfg(unix)]
+fn create_private_file(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn create_private_file(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+}
+
+fn validate_zip_file_entry(path: &Path, rel: &Path) -> Result<()> {
+    let metadata =
+        std::fs::symlink_metadata(path).with_context(|| format!("checking {}", path.display()))?;
+    if !metadata.file_type().is_file() {
+        bail!(
+            "refusing to build: capsule contains a non-regular file ({}). Only regular \
+             files and directories are packaged; remove sockets, FIFOs, devices, or other \
+             special files.",
+            rel.display()
+        );
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        if metadata.nlink() > 1 {
+            bail!(
+                "refusing to build: capsule contains a hardlink ({}). Hardlinks are not \
+                 packaged because they can alias files outside the capsule and exfiltrate \
+                 local bytes into the cloud build context.",
+                rel.display()
+            );
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -218,7 +328,11 @@ mod tests {
     struct Scratch(PathBuf);
     impl Scratch {
         fn new(tag: &str) -> Self {
-            let p = std::env::temp_dir().join(format!(
+            #[cfg(unix)]
+            let root = PathBuf::from("/tmp");
+            #[cfg(not(unix))]
+            let root = std::env::temp_dir();
+            let p = root.join(format!(
                 "hellbox-buildtest-{tag}-{}-{:p}",
                 std::process::id(),
                 &tag as *const _
@@ -240,8 +354,65 @@ mod tests {
         std::fs::create_dir(s.0.join("sub")).unwrap();
         std::fs::write(s.0.join("sub/b.txt"), b"world").unwrap();
         let zip = zip_context(&s.0).expect("normal capsule should package");
-        assert!(zip.exists(), "zip produced");
-        let _ = std::fs::remove_file(zip);
+        assert!(zip.path().exists(), "zip produced");
+    }
+
+    #[test]
+    fn zip_context_uses_random_exclusive_path() {
+        let s = Scratch::new("random");
+        std::fs::write(s.0.join("a.txt"), b"hello").unwrap();
+
+        let predictable =
+            std::env::temp_dir().join(format!("hellbox-context-{}.zip", std::process::id()));
+        let _ = std::fs::remove_file(&predictable);
+        std::fs::write(&predictable, b"do-not-clobber").unwrap();
+
+        let zip_one = zip_context(&s.0).expect("first zip should package");
+        let zip_two = zip_context(&s.0).expect("second zip should package");
+
+        assert_ne!(zip_one.path(), predictable.as_path());
+        assert_ne!(zip_one.path(), zip_two.path());
+        assert_eq!(std::fs::read(&predictable).unwrap(), b"do-not-clobber");
+
+        let _ = std::fs::remove_file(predictable);
+    }
+
+    #[test]
+    fn zip_context_removes_temp_artifact_on_drop() {
+        let s = Scratch::new("cleanup");
+        std::fs::write(s.0.join("a.txt"), b"hello").unwrap();
+
+        let (zip_path, zip_dir) = {
+            let zip = zip_context(&s.0).expect("zip should package");
+            let zip_path = zip.path().to_path_buf();
+            let zip_dir = zip_path.parent().unwrap().to_path_buf();
+            assert!(zip_path.exists(), "zip exists before drop");
+            assert!(zip_dir.is_dir(), "private context dir exists before drop");
+            (zip_path, zip_dir)
+        };
+
+        assert!(!zip_path.exists(), "zip removed on drop");
+        assert!(!zip_dir.exists(), "private context dir removed on drop");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn zip_context_uses_private_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let s = Scratch::new("permissions");
+        std::fs::write(s.0.join("a.txt"), b"hello").unwrap();
+
+        let zip = zip_context(&s.0).expect("zip should package");
+        let dir_mode = std::fs::metadata(zip.path().parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        let file_mode = std::fs::metadata(zip.path()).unwrap().permissions().mode() & 0o777;
+
+        assert_eq!(dir_mode, 0o700, "context dir is private");
+        assert_eq!(file_mode, 0o600, "context zip is private");
     }
 
     #[cfg(unix)]
@@ -260,6 +431,41 @@ mod tests {
         assert!(
             err.to_string().contains("symlink"),
             "error names the symlink: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn zip_context_rejects_hardlinks() {
+        let s = Scratch::new("hardlink");
+        let secret = s.0.join("outside_secret");
+        std::fs::write(&secret, b"AWS_SECRET").unwrap();
+        let cap = s.0.join("capsule");
+        std::fs::create_dir(&cap).unwrap();
+        std::fs::write(cap.join("real.txt"), b"ok").unwrap();
+        std::fs::hard_link(&secret, cap.join("hardlink.txt")).unwrap();
+
+        let err = zip_context(&cap).expect_err("hardlink must be rejected");
+        assert!(
+            err.to_string().contains("hardlink"),
+            "error names the hardlink: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn zip_context_rejects_non_regular_entries() {
+        let s = Scratch::new("socket");
+        let cap = s.0.join("capsule");
+        std::fs::create_dir(&cap).unwrap();
+        std::fs::write(cap.join("real.txt"), b"ok").unwrap();
+        let socket = cap.join("control.sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+
+        let err = zip_context(&cap).expect_err("non-regular entry must be rejected");
+        assert!(
+            err.to_string().contains("non-regular"),
+            "error names the non-regular entry: {err}"
         );
     }
 }

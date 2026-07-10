@@ -12,7 +12,7 @@
 
 ### DOOM inside an AWS Lambda MicroVM.
 
-Suspend it mid firefight and the compute bill stops. Resume it and you are back on the exact
+Suspend it mid firefight and the compute bill stops. Resume it and you're back on the exact
 frame, same demon mid lunge, same health, same ammo.
 
 <img src="docs/assets/hellbox-demo.webp" alt="Hellbox demo: 35 seconds of DOOM streamed live from an AWS Lambda MicroVM to the browser" width="760">

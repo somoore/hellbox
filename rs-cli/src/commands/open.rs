@@ -60,11 +60,10 @@ pub async fn run_with_verify(name: &str, no_open: bool, strict: bool) -> Result<
             .cloned()
             .unwrap_or_default(),
         Err(e) => {
-            tracing::warn!(
-                target: "hellbox::open",
-                "could not mint auth token (capsule may be suspended): {e:#} — \
-                 starting control-only proxy; click Resume in the tab to thaw"
-            );
+            // Expected when the capsule is suspended (can't mint against a frozen
+            // machine). Not a warning: we serve the Resume page and thaw on click.
+            println!("==> '{name}' is suspended — opening the Resume page");
+            tracing::debug!(target: "hellbox::open", "auth token mint failed (capsule suspended): {e:#}");
             String::new()
         }
     };
@@ -169,7 +168,7 @@ async fn open_fork_b(args: OpenForkBArgs<'_>) -> Result<()> {
         base_url.clone()
     };
 
-    tracing::info!(target: "hellbox::open", "Fork B proxy serving {url} (auth header injected; JWE <redacted>)");
+    tracing::debug!(target: "hellbox::open", "proxy serving {url} (auth header injected; JWE <redacted>)");
 
     // Prove the whole chain before handing the user a URL: proxy answering on
     // loopback, and each stream channel handshaking through it into the VM.
@@ -194,12 +193,13 @@ async fn open_fork_b(args: OpenForkBArgs<'_>) -> Result<()> {
         println!("Fork B proxy ready: {url}  (--no-open: not launching browser)");
     } else {
         browser::open(&url)?;
-        println!("opened (Fork B loopback proxy): {url}");
+        println!("==> DOOM is open at {url}");
     }
 
     if idle_minutes > 0 {
-        println!("auto-suspend: will freeze '{name}' after {idle_minutes} idle min with no viewer");
-        tracing::info!(target: "hellbox::open", "Fork B proxy running; Ctrl-C to stop (auto-suspend after {idle_minutes} idle min)");
+        println!(
+            "\nPlaying '{name}'. Ctrl-C to stop hellbox (auto-suspends after {idle_minutes} idle min)."
+        );
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {}
             _ = idle_monitor(activity, idle_minutes) => {
@@ -207,9 +207,12 @@ async fn open_fork_b(args: OpenForkBArgs<'_>) -> Result<()> {
             }
         }
     } else {
-        tracing::info!(target: "hellbox::open", "Fork B proxy running; Ctrl-C to stop");
+        println!(
+            "\nPlaying '{name}'. Ctrl-C to stop hellbox (the MicroVM auto-suspends after ~5 idle min and stops billing)."
+        );
         tokio::signal::ctrl_c().await.ok();
     }
+    println!("\nStopped. Run `hellbox` again anytime to jump back in.");
     Ok(())
 }
 

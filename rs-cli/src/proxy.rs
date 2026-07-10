@@ -125,9 +125,9 @@ pub async fn start(cfg: ProxyConfig) -> Result<String> {
         .context("building forward HTTP client")?;
     let cfg = Arc::new(cfg);
 
-    tracing::info!(
+    tracing::debug!(
         target: "hellbox::proxy",
-        "Fork B loopback proxy on {local} -> https://{} (port {}, header-injecting)",
+        "loopback proxy on {local} -> https://{} (port {}, header-injecting)",
         cfg.upstream.host(), cfg.upstream_port
     );
 
@@ -175,7 +175,10 @@ async fn handle(
         handle_http(req, cfg, client).await
     };
     Ok(result.unwrap_or_else(|e| {
-        tracing::warn!(target: "hellbox::proxy", "proxy error: {e:#}");
+        // Debug, not warn: the common case is a stream service still waking up
+        // (a transient 502 the browser retries through). A genuinely stuck
+        // stream surfaces as a failed end-to-end verification, not this line.
+        tracing::debug!(target: "hellbox::proxy", "proxy error: {e:#}");
         Response::builder()
             .status(StatusCode::BAD_GATEWAY)
             .body(Full::new(Bytes::from_static(b"proxy error")))
@@ -749,7 +752,10 @@ async fn handle_control(
     }
 
     if !has_local_session(req.headers(), &ctrl.control_secret) {
-        tracing::warn!(target: "hellbox::proxy", "rejected control request (missing/invalid local session secret)");
+        // Debug, not warn: the control page's own poll hits this before the
+        // session cookie is set, every few seconds during normal operation. A
+        // real off-loopback probe is caught by the non-loopback check above.
+        tracing::debug!(target: "hellbox::proxy", "rejected control request (missing/invalid local session secret)");
         return Ok(json_response(
             StatusCode::FORBIDDEN,
             r#"{"error":"missing local session secret"}"#.to_string(),

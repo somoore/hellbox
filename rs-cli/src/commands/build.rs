@@ -69,7 +69,7 @@ pub async fn run(name: &str, app: Option<&str>, capsule_dir_override: Option<&st
                 .build(),
         )
         .build();
-    let created = aws
+    let created = match aws
         .microvm
         .create_microvm_image()
         .name(name)
@@ -80,7 +80,23 @@ pub async fn run(name: &str, app: Option<&str>, capsule_dir_override: Option<&st
         .client_token(client_token(name))
         .send()
         .await
-        .context("create_microvm_image")?;
+    {
+        Ok(created) => created,
+        Err(e) => {
+            use aws_sdk_lambdamicrovms::error::ProvideErrorMetadata;
+            if e.message()
+                .map(|m| m.contains("already exists"))
+                .unwrap_or(false)
+            {
+                bail!(
+                    "image '{name}' already exists — `hellbox up --name {name}` launches it \
+                     as-is; to rebuild from the current capsule, `hellbox rm --name {name}` \
+                     first, then build again"
+                );
+            }
+            return Err(e).context("create_microvm_image");
+        }
+    };
     let image_arn = created.image_arn().to_string();
     tracing::info!(target: "hellbox::build", "image creating: {image_arn} (state {})", created.state().as_str());
 

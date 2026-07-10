@@ -109,22 +109,37 @@ download_release_asset(){
   fi
 }
 
+bin_version(){ "$1" --version 2>/dev/null | awk '{print "v"$2}'; }
+
 # Resolve CLI: override -> PATH (brew/winget) -> cache -> local build -> download.
 resolve_hellbox(){
   if [ -n "${HELLBOX_BIN:-}" ]; then printf '%s' "$HELLBOX_BIN"; return; fi
+  local rel; rel="$(resolve_release_tag)"
   # A package-manager install on PATH: Homebrew enforces the formula's SHA256,
   # and the tap pins those hashes only after verifying the release attestation,
-  # so the integrity chain is equivalent to the download path below.
-  if command -v hellbox >/dev/null 2>&1; then command -v hellbox; return; fi
+  # so the integrity chain is equivalent to the download path below. The package
+  # manager owns updates; warn (don't replace) when it lags the wanted release.
+  if command -v hellbox >/dev/null 2>&1; then
+    local path_bin; path_bin="$(command -v hellbox)"
+    if [ -n "$rel" ] && [ "$(bin_version "$path_bin")" != "$rel" ]; then
+      warn "hellbox on PATH is $(bin_version "$path_bin") but this deploy wants $rel — run 'brew upgrade hellbox' (or 'winget upgrade somoore.hellbox') to update"
+    fi
+    printf '%s' "$path_bin"; return
+  fi
+  # Cache: reuse only when it matches the wanted release; a stale cache falls
+  # through to a fresh verified download (it would fail attestation against
+  # the newer tag anyway, so this is the difference between updating and dying).
   if [ -x "$BIN_DIR/hellbox$ext" ] && [ -f "$BIN_DIR/hellbox$ext.sha256" ]; then
-    verify_sha256 "$BIN_DIR/hellbox$ext" "$BIN_DIR/hellbox$ext.sha256"
-    verify_attestation "$BIN_DIR/hellbox$ext"
-    printf '%s' "$BIN_DIR/hellbox$ext"
-    return
+    if [ -n "$rel" ] && [ "$(bin_version "$BIN_DIR/hellbox$ext")" = "$rel" ]; then
+      verify_sha256 "$BIN_DIR/hellbox$ext" "$BIN_DIR/hellbox$ext.sha256"
+      verify_attestation "$BIN_DIR/hellbox$ext" "$rel"
+      printf '%s' "$BIN_DIR/hellbox$ext"
+      return
+    fi
+    say "Cached hellbox is $(bin_version "$BIN_DIR/hellbox$ext"), wanted $rel — updating"
   fi
   if [ -x "rs-cli/target/release/hellbox$ext" ]; then printf '%s' "$(pwd)/rs-cli/target/release/hellbox$ext"; return; fi
-  local asset rel tmp_bin tmp_sum; asset="hellbox-$(detect_target)$ext"
-  rel="$(resolve_release_tag)"
+  local asset tmp_bin tmp_sum; asset="hellbox-$(detect_target)$ext"
   [ -n "$rel" ] || die "could not resolve release tag for $REPO"
   say "Downloading the hellbox CLI: $asset ($rel)"
   mkdir -p "$BIN_DIR"

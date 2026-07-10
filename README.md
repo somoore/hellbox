@@ -49,6 +49,11 @@ sound, click the game, and play (`W A S D` to move, `Ctrl` to fire, `Space` to o
 Hit Suspend when you step away to stop the compute bill, and Resume to pick up where you left
 off.
 
+> **Updating:** `git pull`, update the CLI (`brew upgrade hellbox`, `winget upgrade
+> somoore.hellbox`, or just rerun `./deploy.sh`, which re-fetches and re-verifies the
+> latest release when its cached copy is stale). To rebuild the MicroVM image after
+> capsule changes: `hellbox rm --name doom`, then `./deploy.sh` again.
+
 > **Cost:** a suspended MicroVM is roughly cents per month, and a running, streamed session is
 > roughly $0.19 per hour before data transfer. The actual bill is:
 > `(running vCPU/GB-seconds) + snapshot read/write + snapshot storage + internet data transfer`.

@@ -111,6 +111,22 @@ jobs:
     runs-on: windows-latest
     permissions: {}
     steps:
+      - name: Verify release attestations
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tag = $env:GITHUB_REF_NAME
+          # SECURITY: the manifests we submit pin whatever these assets hash to,
+          # so verify build provenance before handing hashes to winget-pkgs.
+          foreach ($asset in "hellbox-windows-x86_64.exe", "hellbox-windows-arm64.exe") {
+            curl.exe -fsSL -o $asset "https://github.com/somoore/hellbox/releases/download/$tag/$asset"
+            gh attestation verify $asset --repo somoore/hellbox `
+              --signer-workflow "github.com/somoore/hellbox/.github/workflows/release.yml" `
+              --source-ref "refs/tags/$tag"
+          }
+
       - name: Submit somoore.hellbox update
         shell: pwsh
         env:

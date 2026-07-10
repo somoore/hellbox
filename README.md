@@ -99,10 +99,15 @@ GitHub release builds:
   SDL2 + Chocolate Doom and bakes in the shareware WAD) and the running MicroVM itself.
 
 The CLI installs all of this for you — `hellbox deploy` — so you normally never touch
-CloudFormation directly. If you only want the prerequisites stack, click
+CloudFormation directly. If you only want the prerequisites stack on its own:
+
 [![Launch Stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/create/review?templateURL=https://hellbox-launch-932930471665.s3.amazonaws.com/doom.yaml&stackName=Hellbox)
-or run `aws cloudformation deploy --stack-name Hellbox --template-file deploy/doom.yaml
---capabilities CAPABILITY_IAM` from a clone.
+
+```bash
+# or, from a clone:
+aws cloudformation deploy --region us-east-1 --stack-name Hellbox \
+  --template-file deploy/doom.yaml --capabilities CAPABILITY_IAM
+```
 
 ## How it works
 

@@ -1,10 +1,14 @@
 <div align="center">
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hellbox-wordmark-dark.svg">
-  <source media="(prefers-color-scheme: light)" srcset="docs/assets/hellbox-wordmark-light.svg">
-  <img src="docs/assets/hellbox-wordmark-dark.svg" alt="Hellbox" width="360">
-</picture>
+<p>
+  <img src="docs/assets/hellbox-mark-animated.webp" alt="Hellbox" height="96" align="middle">
+  &nbsp;
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hellbox-word-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/hellbox-word-light.svg">
+    <img src="docs/assets/hellbox-word-dark.svg" alt="HELLBOX" height="60" align="middle">
+  </picture>
+</p>
 
 [![CI](https://github.com/somoore/hellbox/actions/workflows/ci.yml/badge.svg)](https://github.com/somoore/hellbox/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/somoore/hellbox)](https://github.com/somoore/hellbox/releases/latest)

@@ -101,6 +101,12 @@ pub async fn run(name: &str, region_flag: Option<&str>, parameters: &[String]) -
     let cfg = write_config(&cfn, &stack, &region, &identity).await?;
     println!("==> Wrote {}", Config::path()?.display());
 
+    // Reconcile local state from AWS by name. Covers the reinstall / new-machine
+    // case: the stack (and maybe the image and a running MicroVM) still exist,
+    // but ~/.hellbox was wiped. Rediscover them so build/up/play/rm all see
+    // reality instead of erroring on an image the local state doesn't know about.
+    reconcile_state(&sdk, name, &identity, &region).await?;
+
     // Idempotent rerun: if this capsule's image already exists and is active,
     // reuse it instead of failing the build step. `hellbox rm` first to rebuild.
     if existing_image_active(&sdk, name).await {
@@ -132,7 +138,11 @@ async fn resolve_region(flag: Option<&str>) -> String {
         return r;
     }
     // The active AWS profile's `region =` (~/.aws/config), like the AWS CLI uses.
-    if let Some(r) = aws_config::meta::region::RegionProviderChain::default_provider()
+    // ProfileFileRegionProvider only, NOT the default chain: the default chain
+    // includes an IMDS probe that times out with a noisy WARN off-EC2 (a laptop),
+    // and we already fall back to us-east-1 below.
+    use aws_config::meta::region::ProvideRegion;
+    if let Some(r) = aws_config::profile::region::ProfileFileRegionProvider::default()
         .region()
         .await
     {
@@ -225,6 +235,76 @@ async fn ensure_stack(
 
 fn error_says(msg: &Option<&str>, needle: &str) -> bool {
     msg.map(|m| m.contains(needle)).unwrap_or(false)
+}
+
+/// Rediscover an existing image and MicroVM for `name` from AWS and write them
+/// into local state. No-op when nothing exists (fresh account) or when local
+/// state already has them. The image ARN is deterministic from name, so a
+/// wiped ~/.hellbox can still find the image the stack's account owns.
+async fn reconcile_state(
+    sdk: &aws_config::SdkConfig,
+    name: &str,
+    identity: &aws::Identity,
+    region: &str,
+) -> Result<()> {
+    use crate::state::State;
+    let microvm = aws_sdk_lambdamicrovms::Client::new(sdk);
+
+    // Deterministic image ARN: arn:aws:lambda:<region>:<account>:microvm-image:<name>
+    let image_arn = format!(
+        "arn:aws:lambda:{region}:{}:microvm-image:{name}",
+        identity.account
+    );
+    let image = microvm
+        .get_microvm_image()
+        .image_identifier(&image_arn)
+        .send()
+        .await
+        .ok()
+        .filter(|o| o.state().as_str() == "CREATED");
+    let Some(image) = image else {
+        return Ok(()); // no image in AWS — a normal fresh deploy will build one
+    };
+    let image_version = image.latest_active_image_version().map(str::to_string);
+
+    // Is a MicroVM from this image still around? list_microvms carries image_arn.
+    let live_microvm = microvm.list_microvms().send().await.ok().and_then(|out| {
+        out.items()
+            .iter()
+            .find(|m| m.image_arn() == image_arn && !matches!(m.state().as_str(), "TERMINATED"))
+            .map(|m| (m.microvm_id().to_string(), m.state().as_str().to_string()))
+    });
+
+    // Endpoint only exists for a live MicroVM; fetch it via get_microvm.
+    let endpoint = if let Some((id, _)) = &live_microvm {
+        crate::lifecycle::microvm_endpoint(&microvm, id).await.ok()
+    } else {
+        None
+    };
+
+    let mut state = State::load().unwrap_or_default();
+    let already = state
+        .get(name)
+        .map(|c| c.image_arn.is_some())
+        .unwrap_or(false);
+    state.upsert(name, |c| {
+        c.image_arn = Some(image_arn.clone());
+        c.image_version = image_version.clone();
+        if let Some((id, st)) = &live_microvm {
+            c.microvm_id = Some(id.clone());
+            c.state = Some(st.clone());
+            c.endpoint = endpoint.as_deref().map(crate::lifecycle::host_of);
+        }
+    })?;
+    if !already {
+        match &live_microvm {
+            Some((_, st)) => println!(
+                "==> Found an existing '{name}' image and MicroVM ({st}) in AWS — adopting them"
+            ),
+            None => println!("==> Found an existing '{name}' image in AWS — adopting it"),
+        }
+    }
+    Ok(())
 }
 
 /// True when local state records an image for this capsule and the service

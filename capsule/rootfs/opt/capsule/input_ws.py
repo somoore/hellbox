@@ -13,6 +13,9 @@ from Xlib.ext import xtest
 PORT = 6904
 
 d = display.Display(':1')
+_screen = d.screen()
+SCREEN_W = int(_screen.width_in_pixels)
+SCREEN_H = int(_screen.height_in_pixels)
 
 # Non-printable JS key names.
 SPECIAL_KEYS = {
@@ -33,10 +36,12 @@ SPECIAL_KEYS = {
 
 
 def _keysym_for(key):
-    """Map a JS key name to an X keysym."""
+    """Map a JS key name to an X keysym (special keys + printable ASCII only)."""
     if key in SPECIAL_KEYS:
         return SPECIAL_KEYS[key]
-    if isinstance(key, str) and len(key) == 1:
+    # Printable ASCII covers every key DOOM binds (movement, menus, cheats);
+    # rejecting the rest keeps arbitrary keysym injection off the XTEST channel.
+    if isinstance(key, str) and len(key) == 1 and " " <= key <= "~":
         ks = XK.string_to_keysym(key)
         if ks == 0 and key.isupper():
             ks = XK.string_to_keysym(key.lower())
@@ -58,12 +63,16 @@ def _handle_key(msg):
 
 
 def _handle_move(msg):
-    xtest.fake_input(d, X.MotionNotify, x=int(msg.get("x", 0)), y=int(msg.get("y", 0)))
+    x = min(max(int(msg.get("x", 0)), 0), SCREEN_W - 1)
+    y = min(max(int(msg.get("y", 0)), 0), SCREEN_H - 1)
+    xtest.fake_input(d, X.MotionNotify, x=x, y=y)
     d.sync()
 
 
 def _handle_button(msg):
     button = int(msg.get("button", 0)) + 1
+    if not 1 <= button <= 5:  # left/middle/right + wheel only
+        return
     evt = X.ButtonPress if msg.get("down") else X.ButtonRelease
     xtest.fake_input(d, evt, button)
     d.sync()

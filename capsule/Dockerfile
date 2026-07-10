@@ -1,5 +1,7 @@
 # Hellbox capsule: native aarch64 Chocolate Doom streamed to the browser.
-FROM public.ecr.aws/lambda/microvms:al2023-minimal
+# Digest-pinned so the base can't be silently retargeted (everything else in this
+# file is already SHA256-verified). Update the digest deliberately when bumping.
+FROM public.ecr.aws/lambda/microvms:al2023-minimal@sha256:05cb9b38d841e7ff1b693dc9e894909612f340bf99ec97d426e8000a5bbe96c3
 
 ARG FFMPEG_RELEASE=autobuild-2026-06-26-13-36
 ARG FFMPEG_ASSET=ffmpeg-n8.1.2-linuxarm64-gpl-8.1.tar.xz
@@ -133,5 +135,7 @@ COPY index.html /opt/novnc/index.html
 COPY rootfs/ /
 RUN chmod +x /opt/capsule/start.sh /opt/capsule/run_app.sh
 
-EXPOSE 6901 6902 9000
+# Documentation only — real exposure is the auth token's allowedPorts (6901-6904).
+# The readiness hook (:9000) is loopback-internal and deliberately NOT listed.
+EXPOSE 6901 6902 6903 6904
 CMD ["/opt/capsule/start.sh"]

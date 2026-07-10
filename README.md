@@ -170,8 +170,17 @@ aws cloudformation deploy --region us-east-1 --stack-name Hellbox \
 [Releases](https://github.com/somoore/Hellbox/releases), or build from source:
 `cd rs-cli && make release`.
 
-**3. Write `~/.hellbox/config.toml`** from the stack outputs (region, artifact bucket, and
-the build and execution role ARNs).
+**3. Write `~/.hellbox/config.toml`** from the stack Outputs. All five keys below are
+required (`display` is optional; `h264` is the low-latency WebCodecs path):
+
+```toml
+region             = "us-east-1"
+artifact_bucket    = "<ArtifactBucket output>"
+build_role_arn     = "<BuildRoleArn output>"
+execution_role_arn = "<ExecutionRoleArn output>"
+base_image_arn     = "arn:aws:lambda:us-east-1:aws:microvm-image:al2023-1"
+display            = "h264"
+```
 
 **4. Drive the lifecycle:**
 

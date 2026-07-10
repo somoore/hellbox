@@ -6,14 +6,16 @@ on:
   push:
     tags: ['v*']
 
-permissions:
-  contents: write
-  attestations: write
-  id-token: write
+# Restrictive default; the build job opts into exactly what it needs.
+permissions: {}
 
 jobs:
   build:
     name: ${{ matrix.asset }}
+    permissions:
+      contents: write       # attach assets to the release
+      attestations: write   # build-provenance attestation
+      id-token: write       # OIDC for attestation signing
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false

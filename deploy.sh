@@ -10,7 +10,7 @@ set -euo pipefail
 STACK="${HELLBOX_STACK:-Hellbox}"
 REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
 NAME="${HELLBOX_NAME:-doom}"
-REPO="${HELLBOX_REPO:-somoore/Hellbox}"
+REPO="${HELLBOX_REPO:-somoore/hellbox}"
 VERSION="${HELLBOX_VERSION:-latest}"
 HOME_DIR="${HELLBOX_HOME:-$HOME/.hellbox}"
 BIN_DIR="$HOME_DIR/bin"

@@ -6,12 +6,28 @@ on:
   push:
     tags: ['v*']
 
-# Restrictive default; the build job opts into exactly what it needs.
+# Restrictive default; each job opts into exactly what it needs.
 permissions: {}
 
 jobs:
+  # Create the release once, before the matrix fans out — six concurrent
+  # "create release" calls race on the tag and exhaust their retries.
+  create-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create release if missing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+                 --title "$GITHUB_REF_NAME" --generate-notes
+
   build:
     name: ${{ matrix.asset }}
+    needs: create-release
     permissions:
       contents: write       # attach assets to the release
       attestations: write   # build-provenance attestation

@@ -6,8 +6,8 @@
   <img src="docs/assets/hellbox-wordmark-dark.png" alt="Hellbox" width="320">
 </picture>
 
-[![CI](https://github.com/somoore/Hellbox/actions/workflows/ci.yml/badge.svg)](https://github.com/somoore/Hellbox/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/somoore/Hellbox)](https://github.com/somoore/Hellbox/releases/latest)
+[![CI](https://github.com/somoore/hellbox/actions/workflows/ci.yml/badge.svg)](https://github.com/somoore/hellbox/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/somoore/hellbox)](https://github.com/somoore/hellbox/releases/latest)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 ### DOOM inside an AWS Lambda MicroVM.
@@ -37,8 +37,8 @@ real instead of abstract.
 You need the [AWS CLI](https://aws.amazon.com/cli/) configured with credentials. Then:
 
 ```bash
-git clone https://github.com/somoore/Hellbox
-cd Hellbox
+git clone https://github.com/somoore/hellbox
+cd hellbox
 ./deploy.sh
 ```
 
@@ -139,7 +139,7 @@ Full design is in [docs/architecture.md](docs/architecture.md), the security mod
 | `AWS_REGION` | `us-east-1` | Region to deploy into (any region with Lambda MicroVMs works). |
 | `HELLBOX_NAME` | `doom` | Capsule name (the image and the MicroVM). |
 | `HELLBOX_STACK` | `Hellbox` | CloudFormation stack name. |
-| `HELLBOX_REPO` | `somoore/Hellbox` | Release repo to download `hellbox` from. |
+| `HELLBOX_REPO` | `somoore/hellbox` | Release repo to download `hellbox` from. |
 | `HELLBOX_VERSION` | latest release | Pin the `hellbox` binary to a specific release tag. |
 | `HELLBOX_SKIP_ATTESTATION` | `0` | Set to `1` only if you deliberately want to skip `gh attestation verify`. |
 | `HELLBOX_HOME` | `~/.hellbox` | Where config, state, and the binary live. |
@@ -167,7 +167,7 @@ aws cloudformation deploy --region us-east-1 --stack-name Hellbox \
 ```
 
 **2. Get the `hellbox` binary.** Download the one for your system from
-[Releases](https://github.com/somoore/Hellbox/releases), or build from source:
+[Releases](https://github.com/somoore/hellbox/releases), or build from source:
 `cd rs-cli && make release`.
 
 **3. Write `~/.hellbox/config.toml`** from the stack Outputs. All five keys below are

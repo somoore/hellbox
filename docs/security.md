@@ -66,7 +66,7 @@ The parts I deliberately left out of scope:
   through the standard AWS chain and never writes them; `~/.hellbox/` holds only non-secret
   config and capsule state.
 - **The prebuilt binary is a supply-chain dependency.** `deploy.sh` downloads `hellbox` from this
-  repo's [GitHub Releases](https://github.com/somoore/Hellbox/releases), verifies the
+  repo's [GitHub Releases](https://github.com/somoore/hellbox/releases), verifies the
   release SHA256 sidecar, and verifies the GitHub artifact attestation when `gh` is available.
   Release builds are produced by the [release workflow](../.github/workflows/release.yml) from
   this source. To avoid trusting a prebuilt artifact, build it yourself (`cd rs-cli && make

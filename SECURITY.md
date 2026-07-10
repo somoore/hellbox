@@ -10,7 +10,7 @@ of the security posture.
 This is a personal demo, not a hosted service. If you find a security issue, please **do not
 post a public exploit**. Instead:
 
-- Open a [private security advisory](https://github.com/somoore/Hellbox/security/advisories/new), or
+- Open a [private security advisory](https://github.com/somoore/hellbox/security/advisories/new), or
 - Open a regular issue for low-risk findings, or
 - Contact the repository owner directly.
 

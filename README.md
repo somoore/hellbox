@@ -78,9 +78,16 @@ Full reference, flags, and troubleshooting: [docs/cli.md](docs/cli.md).
 <summary><b>Cost, updating, browsers, and the repo option</b></summary>
 <br>
 
-**Cost.** A suspended MicroVM costs cents per month. A running, streamed session is roughly
-$0.19/hour before data transfer. The MicroVM auto-suspends after about 5 idle minutes and
-wakes on traffic, so walking away is cheap. Done for good? `hellbox destroy`.
+**Cost** (us-east-1, ARM, [official rates](https://aws.amazon.com/lambda/pricing/), default
+1 vCPU / 2 GB MicroVM). Running and streaming: about $0.13/hour of compute, billed per
+second (it can burst above the baseline under load), plus data transfer. The stream runs
+roughly 0.5 to 1 GB/hour, and AWS gives you 100 GB/month of free egress before $0.09/GB
+kicks in. A suspend/resume cycle costs about a penny. A suspended machine only pays
+snapshot storage ($0.08/GB-month, so around 16 cents/month prorated), and AWS terminates
+it after about 8 hours anyway. The stored image also pays snapshot storage while you keep
+it, likely a few tens of cents per month. The MicroVM auto-suspends after about 5 idle
+minutes and wakes on traffic, so walking away is cheap. Done for good? `hellbox destroy`
+ends all of it.
 
 **Updating.** `brew upgrade hellbox`. To rebuild the MicroVM image on a new version, run
 `hellbox rm`, then `hellbox deploy`.
@@ -130,8 +137,17 @@ release builds:
 - The **DOOM capsule**: a MicroVM image, built in the cloud from a Dockerfile that compiles
   SDL2 and Chocolate Doom and bakes in the shareware WAD, plus the running MicroVM itself.
 
-The CLI installs all of this for you when you run `hellbox deploy`, so you normally never
-touch CloudFormation directly. If you only want the prerequisites stack on its own:
+**If you use the CLI, this part is automatic.** `hellbox deploy` creates the stack, builds
+the image, and launches the MicroVM for you. There is nothing to click and no
+CloudFormation to touch.
+
+<details>
+<summary>Manual option: create the stack yourself (skip this if you use <code>hellbox deploy</code>)</summary>
+<br>
+
+Some people want to create the prerequisites stack by hand first, for example to review
+exactly what lands in their account before running anything. That is the only reason this
+button exists:
 
 [![Launch Stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/create/review?templateURL=https://hellbox-launch-932930471665.s3.amazonaws.com/doom.yaml&stackName=Hellbox)
 
@@ -140,6 +156,10 @@ touch CloudFormation directly. If you only want the prerequisites stack on its o
 aws cloudformation deploy --region us-east-1 --stack-name Hellbox \
   --template-file deploy/doom.yaml --capabilities CAPABILITY_IAM
 ```
+
+Either way, `hellbox deploy` afterwards detects the existing stack and just uses it.
+
+</details>
 
 </details>
 

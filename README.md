@@ -69,9 +69,6 @@ does the same thing (and uses a `hellbox` already on your PATH).
 
 ## The two parts of Hellbox
 
-People reasonably ask: *"why is there a Homebrew package AND CloudFormation?"* Because
-Hellbox is two pieces that talk to each other:
-
 ### 1 · The `hellbox` CLI — runs on your machine
 
 One Rust binary with two jobs:

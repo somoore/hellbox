@@ -67,6 +67,10 @@ jobs:
       - uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1
 
       - name: Build
+        env:
+          # Windows: statically link the CRT so the exe runs on machines without
+          # the VC++ redistributable (winget validation VMs, clean installs).
+          RUSTFLAGS: ${{ runner.os == 'Windows' && '-C target-feature=+crt-static' || '' }}
         run: cargo build --release --features proxy --target ${{ matrix.target }}
 
       - name: Stage asset (unix)

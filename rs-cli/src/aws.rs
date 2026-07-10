@@ -93,8 +93,14 @@ pub fn require_same_account(cfg: &Config, identity: &Identity) -> Result<()> {
 }
 
 impl Aws {
+    /// Build the AWS clients, first checking that credentials actually work so
+    /// every command gets the friendly "no working AWS credentials" message
+    /// instead of a raw SDK provider-chain dump. (`play`/`deploy`/`destroy`
+    /// preflight separately because they also need the returned `Identity`.)
     pub async fn new(cfg: &Config) -> Result<Self> {
-        Ok(Self::from_sdk_config(&sdk_config(&cfg.region).await))
+        let sdk = sdk_config(&cfg.region).await;
+        preflight_identity(&sdk).await?;
+        Ok(Self::from_sdk_config(&sdk))
     }
 
     pub fn from_sdk_config(sdk_config: &aws_config::SdkConfig) -> Self {

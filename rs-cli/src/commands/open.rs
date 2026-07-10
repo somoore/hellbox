@@ -190,7 +190,7 @@ async fn open_fork_b(args: OpenForkBArgs<'_>) -> Result<()> {
     }
 
     if no_open {
-        println!("Fork B proxy ready: {url}  (--no-open: not launching browser)");
+        println!("==> proxy ready at {url}  (--no-open: browser not launched)");
     } else {
         browser::open(&url)?;
         println!("==> DOOM is open at {url}");

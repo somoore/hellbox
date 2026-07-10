@@ -22,12 +22,13 @@ pub async fn run(name: &str, app: Option<&str>, capsule_dir_override: Option<&st
     let cfg = Config::load()?;
     let mut state = State::load()?;
 
-    let capsule_dir = capsule_dir(capsule_dir_override)?;
+    let capsule = capsule_dir(capsule_dir_override)?;
+    let capsule_dir = capsule.path();
     if let Some(app) = app {
         tracing::info!(target: "hellbox::build", "note: --app {app} — ensure it's staged under capsule/app/");
     }
 
-    let context_zip = zip_context(&capsule_dir)
+    let context_zip = zip_context(capsule_dir)
         .with_context(|| format!("zipping build context at {}", capsule_dir.display()))?;
     tracing::info!(target: "hellbox::build", "built context zip at {}", context_zip.path().display());
 
@@ -69,32 +70,51 @@ pub async fn run(name: &str, app: Option<&str>, capsule_dir_override: Option<&st
                 .build(),
         )
         .build();
-    let created = match aws
-        .microvm
-        .create_microvm_image()
-        .name(name)
-        .base_image_arn(&cfg.base_image_arn)
-        .build_role_arn(&cfg.build_role_arn)
-        .code_artifact(CodeArtifact::Uri(code_artifact_uri))
-        .hooks(hooks)
-        .client_token(client_token(name))
-        .send()
-        .await
-    {
-        Ok(created) => created,
-        Err(e) => {
-            use aws_sdk_lambdamicrovms::error::ProvideErrorMetadata;
-            if e.message()
-                .map(|m| m.contains("already exists"))
-                .unwrap_or(false)
-            {
-                bail!(
-                    "image '{name}' already exists — `hellbox up --name {name}` launches it \
-                     as-is; to rebuild from the current capsule, `hellbox rm --name {name}` \
-                     first, then build again"
-                );
+    // If local state has no image for this name, an "already exists" from the
+    // service almost certainly means a just-issued DeleteMicrovmImage is still
+    // completing (deletion is async and the name stays reserved meanwhile), so
+    // retry rather than fail — the exact path `hellbox destroy` + `deploy` hits.
+    let known_image = state.get(name).and_then(|c| c.image_arn.clone()).is_some();
+    let token = client_token(name);
+    let mut delete_lag_retries = 0u32;
+    let created = loop {
+        let attempt = aws
+            .microvm
+            .create_microvm_image()
+            .name(name)
+            .base_image_arn(&cfg.base_image_arn)
+            .build_role_arn(&cfg.build_role_arn)
+            .code_artifact(CodeArtifact::Uri(code_artifact_uri.clone()))
+            .hooks(hooks.clone())
+            .client_token(&token)
+            .send()
+            .await;
+        match attempt {
+            Ok(created) => break created,
+            Err(e) => {
+                use aws_sdk_lambdamicrovms::error::ProvideErrorMetadata;
+                let already_exists = e
+                    .message()
+                    .map(|m| m.contains("already exists"))
+                    .unwrap_or(false);
+                if already_exists && !known_image && delete_lag_retries < 18 {
+                    delete_lag_retries += 1;
+                    tracing::info!(
+                        target: "hellbox::build",
+                        "image name '{name}' still releasing after a delete — retrying create ({delete_lag_retries}/18)"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                    continue;
+                }
+                if already_exists {
+                    bail!(
+                        "image '{name}' already exists — `hellbox up --name {name}` launches it \
+                         as-is; to rebuild from the current capsule, `hellbox rm --name {name}` \
+                         first, then build again"
+                    );
+                }
+                return Err(e).context("create_microvm_image");
             }
-            return Err(e).context("create_microvm_image");
         }
     };
     let image_arn = created.image_arn().to_string();
@@ -152,19 +172,58 @@ pub async fn run(name: &str, app: Option<&str>, capsule_dir_override: Option<&st
     Ok(())
 }
 
-fn capsule_dir(override_path: Option<&str>) -> Result<PathBuf> {
-    let dir = match override_path {
-        Some(p) => PathBuf::from(p),
-        None => std::env::current_dir()?.join("capsule"),
-    };
-    if !dir.is_dir() {
-        bail!(
-            "no capsule dir at {} — run `hellbox build` from the Hellbox repo root, \
-             or pass --capsule-dir <PATH>",
-            dir.display()
-        );
+/// Keeps an extracted embedded capsule alive for the duration of the build.
+pub enum CapsuleDir {
+    OnDisk(PathBuf),
+    Embedded(PathBuf),
+}
+
+impl CapsuleDir {
+    fn path(&self) -> &Path {
+        match self {
+            CapsuleDir::OnDisk(p) | CapsuleDir::Embedded(p) => p,
+        }
     }
-    Ok(dir)
+}
+
+impl Drop for CapsuleDir {
+    fn drop(&mut self) {
+        if let CapsuleDir::Embedded(p) = self {
+            let _ = std::fs::remove_dir_all(p);
+        }
+    }
+}
+
+fn capsule_dir(override_path: Option<&str>) -> Result<CapsuleDir> {
+    if let Some(p) = override_path {
+        let dir = PathBuf::from(p);
+        if !dir.is_dir() {
+            bail!("no capsule dir at {}", dir.display());
+        }
+        return Ok(CapsuleDir::OnDisk(dir));
+    }
+    let local = std::env::current_dir()?.join("capsule");
+    if local.is_dir() {
+        return Ok(CapsuleDir::OnDisk(local));
+    }
+    // No repo checkout in sight: extract the capsule baked into this binary,
+    // so a brew/winget install can build without cloning anything.
+    let root = std::env::temp_dir().join(format!("hellbox-capsule-{}", random_context_suffix()?));
+    create_private_dir(&root).with_context(|| format!("creating {}", root.display()))?;
+    for (rel, bytes) in crate::embedded::CAPSULE_FILES {
+        let dest = root.join(rel);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating {}", parent.display()))?;
+        }
+        std::fs::write(&dest, bytes).with_context(|| format!("writing {}", dest.display()))?;
+    }
+    tracing::info!(
+        target: "hellbox::build",
+        "no ./capsule checkout — using the capsule embedded in this binary (v{})",
+        env!("CARGO_PKG_VERSION")
+    );
+    Ok(CapsuleDir::Embedded(root))
 }
 
 fn client_token(name: &str) -> String {

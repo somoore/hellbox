@@ -129,6 +129,9 @@ jobs:
         run: cargo clippy --features proxy -- -D warnings
       - name: Test
         run: cargo test --features proxy
+      - name: Verify embedded capsule matches tracked files
+        working-directory: .
+        run: scripts/check-embedded-capsule.sh
 
   rust-deny:
     name: rust deny (advisories + licenses)
@@ -195,6 +198,8 @@ jobs:
           python-version: '3.11'
       - name: Verify capsule wheel hashes (cp311/aarch64, all glibc tiers)
         run: scripts/check-reqs.sh
+      - name: Verify embedded capsule matches tracked files
+        run: scripts/check-embedded-capsule.sh
       - name: Lint Dockerfile
         uses: hadolint/hadolint-action@2332a7b74a6de0dda2e2221d575162eba76ba5e5 # v3.3.0
         with:

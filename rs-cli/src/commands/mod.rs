@@ -2,6 +2,8 @@
 
 pub mod build;
 pub mod config_cmd;
+pub mod deploy;
+pub mod destroy;
 pub mod down;
 pub mod open;
 pub mod ps;

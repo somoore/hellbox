@@ -15,6 +15,12 @@ const AUTH_HEADER: &str = "X-aws-proxy-auth";
 const TOKEN_TTL_MINUTES: i32 = 30;
 
 pub async fn run(name: &str, no_open: bool) -> Result<()> {
+    run_with_verify(name, no_open, false).await
+}
+
+/// `strict` (used by `hellbox deploy`) turns a failed end-to-end stream
+/// verification into an error instead of a warning.
+pub async fn run_with_verify(name: &str, no_open: bool, strict: bool) -> Result<()> {
     let cfg = Config::load()?;
     let state = State::load()?;
     let capsule = state.require(name)?;
@@ -77,6 +83,7 @@ pub async fn run(name: &str, no_open: bool) -> Result<()> {
         microvm_id: &microvm_id,
         name,
         idle_minutes,
+        strict,
     })
     .await
 }
@@ -94,6 +101,7 @@ struct OpenForkBArgs<'a> {
     microvm_id: &'a str,
     name: &'a str,
     idle_minutes: u64,
+    strict: bool,
 }
 
 #[cfg(feature = "proxy")]
@@ -115,11 +123,13 @@ async fn open_fork_b(args: OpenForkBArgs<'_>) -> Result<()> {
         microvm_id,
         name,
         idle_minutes,
+        strict,
     } = args;
 
     let activity = Arc::new(ProxyActivity::default());
     let upstream = Upstream::new(host_of(endpoint), jwe.to_string());
     let control_secret = generate_control_secret()?;
+    let control_secret_copy = control_secret.clone();
     let control = Arc::new(ProxyControl {
         microvm: aws.microvm.clone(),
         microvm_id: microvm_id.to_string(),
@@ -156,10 +166,30 @@ async fn open_fork_b(args: OpenForkBArgs<'_>) -> Result<()> {
     let url = if h264 {
         format!("{base_url}/?display=h264")
     } else {
-        base_url
+        base_url.clone()
     };
 
     tracing::info!(target: "hellbox::open", "Fork B proxy serving {url} (auth header injected; JWE <redacted>)");
+
+    // Prove the whole chain before handing the user a URL: proxy answering on
+    // loopback, and each stream channel handshaking through it into the VM.
+    println!("==> Verifying the stream end to end");
+    let failures = verify_end_to_end(&base_url, &control_secret_copy).await;
+    if failures.is_empty() {
+        println!("verified: page ✓  video ✓  audio ✓  input ✓");
+    } else {
+        let what = failures.join(", ");
+        if strict {
+            anyhow::bail!(
+                "end-to-end verification failed ({what}) — the capsule is up but those \
+                 channels are not answering; try `hellbox suspend` + `hellbox resume`, \
+                 or rebuild with `hellbox rm` + `hellbox deploy`"
+            );
+        }
+        tracing::warn!(target: "hellbox::open", "verification failed for: {what} (continuing)");
+        println!("warning: {what} not answering yet — the page may still recover once loaded");
+    }
+
     if no_open {
         println!("Fork B proxy ready: {url}  (--no-open: not launching browser)");
     } else {
@@ -223,6 +253,66 @@ async fn suspend_idle(aws: &Aws, microvm_id: &str, name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Prove the proxy answers and every stream channel handshakes through it
+/// into the VM. Retries with capped exponential backoff while the capsule
+/// settles after boot/resume. Returns the channels that never answered.
+#[cfg(feature = "proxy")]
+async fn verify_end_to_end(base_url: &str, control_secret: &str) -> Vec<String> {
+    use std::time::Duration;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    let mut failures = Vec::new();
+
+    let mut page_ok = false;
+    for attempt in 0..5u32 {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_secs(1u64 << attempt.min(3))).await;
+        }
+        if let Ok(resp) = reqwest::get(base_url).await
+            && resp.status().is_success()
+        {
+            page_ok = true;
+            break;
+        }
+    }
+    if !page_ok {
+        failures.push("page".to_string());
+    }
+
+    let ws_base = base_url.replacen("http", "ws", 1);
+    for channel in ["video", "audio", "input"] {
+        let mut ok = false;
+        for attempt in 0..6u32 {
+            if attempt > 0 {
+                tokio::time::sleep(Duration::from_secs(1u64 << attempt.min(3))).await;
+            }
+            let url = format!("{ws_base}/hellbox/{channel}");
+            let Ok(mut req) = url.into_client_request() else {
+                break;
+            };
+            if let Ok(v) =
+                hyper::header::HeaderValue::from_str(&format!("hellbox_control={control_secret}"))
+            {
+                req.headers_mut().insert(hyper::header::COOKIE, v);
+            }
+            match tokio_tungstenite::connect_async(req).await {
+                Ok((mut ws, _)) => {
+                    let _ = ws.close(None).await;
+                    ok = true;
+                    break;
+                }
+                Err(e) => {
+                    tracing::debug!(target: "hellbox::open", "verify {channel} attempt {attempt}: {e}");
+                }
+            }
+        }
+        if !ok {
+            failures.push(channel.to_string());
+        }
+    }
+    failures
+}
+
 #[cfg(feature = "proxy")]
 fn generate_control_secret() -> Result<String> {
     let mut bytes = [0u8; 32];
@@ -245,6 +335,7 @@ async fn open_fork_b(args: OpenForkBArgs<'_>) -> Result<()> {
         args.microvm_id,
         args.name,
         args.idle_minutes,
+        args.strict,
     );
     anyhow::bail!(
         "hellbox open requires the `proxy` feature (Fork B loopback proxy), which is \

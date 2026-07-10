@@ -1,6 +1,6 @@
 [package]
 name = "hellbox"
-version = "1.0.4"
+version = "1.0.5"
 edition = "2024"
 description = "Run native DOOM inside an AWS Lambda MicroVM, streamed to a browser tab"
 license = "Apache-2.0"
@@ -36,6 +36,10 @@ aws-sdk-s3 = { version = "1", default-features = false, features = [
 ] } # upload the build context
 # Official AWS SDK for the Lambda MicroVMs API (Smithy-generated).
 aws-sdk-lambdamicrovms = { version = "1", default-features = false, features = [
+    "default-https-client", "rt-tokio",
+] }
+# `hellbox deploy`/`destroy`: create and delete the prerequisites stack.
+aws-sdk-cloudformation = { version = "1", default-features = false, features = [
     "default-https-client", "rt-tokio",
 ] }
 

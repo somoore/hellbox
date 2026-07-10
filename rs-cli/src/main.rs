@@ -5,6 +5,7 @@ mod aws;
 mod browser;
 mod commands;
 mod config;
+mod embedded;
 mod lifecycle;
 mod poll;
 mod state;
@@ -23,9 +24,30 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// One-command install: AWS prerequisites stack, image build, launch, open.
+    Deploy {
+        #[command(subcommand)]
+        action: Option<DeployAction>,
+        #[arg(long, default_value = "doom")]
+        name: String,
+        /// Region to deploy into (default: AWS_REGION / AWS_DEFAULT_REGION / us-east-1).
+        #[arg(long, short = 'r')]
+        region: Option<String>,
+        /// CloudFormation parameter override, KEY=VALUE (repeatable).
+        #[arg(long = "parameter", short = 'p', value_name = "KEY=VALUE")]
+        parameters: Vec<String>,
+    },
+    /// Full teardown: microvm, image, artifact bucket, stack, local state.
+    Destroy {
+        #[arg(long, default_value = "doom")]
+        name: String,
+        /// Actually delete (destroy refuses to run without this).
+        #[arg(long)]
+        yes: bool,
+    },
     /// Bake the app into a MicroVM image.
     Build {
-        #[arg(long)]
+        #[arg(long, default_value = "doom")]
         name: String,
         #[arg(long)]
         app: Option<String>,
@@ -35,12 +57,12 @@ enum Cmd {
     },
     /// Launch a MicroVM from the image.
     Up {
-        #[arg(long)]
+        #[arg(long, default_value = "doom")]
         name: String,
     },
     /// Open the running capsule in a browser tab.
     Open {
-        #[arg(long)]
+        #[arg(long, default_value = "doom")]
         name: String,
         /// Start the proxy and print its URL but don't launch the browser.
         #[arg(long = "no-open")]
@@ -53,22 +75,22 @@ enum Cmd {
     },
     /// Freeze the capsule.
     Suspend {
-        #[arg(long)]
+        #[arg(long, default_value = "doom")]
         name: String,
     },
     /// Thaw the capsule.
     Resume {
-        #[arg(long)]
+        #[arg(long, default_value = "doom")]
         name: String,
     },
     /// Terminate the capsule.
     Down {
-        #[arg(long)]
+        #[arg(long, default_value = "doom")]
         name: String,
     },
     /// Delete the microvm image and local state.
     Rm {
-        #[arg(long)]
+        #[arg(long, default_value = "doom")]
         name: String,
     },
     /// List known capsules.
@@ -76,6 +98,12 @@ enum Cmd {
         #[arg(long)]
         refresh: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum DeployAction {
+    /// Open the stack template in $EDITOR; later deploys use the edited copy.
+    Edit,
 }
 
 #[derive(Subcommand)]
@@ -103,6 +131,17 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
     match cli.cmd {
+        Cmd::Deploy {
+            action: Some(DeployAction::Edit),
+            ..
+        } => commands::deploy::edit(),
+        Cmd::Deploy {
+            action: None,
+            name,
+            region,
+            parameters,
+        } => commands::deploy::run(&name, region.as_deref(), &parameters).await,
+        Cmd::Destroy { name, yes } => commands::destroy::run(&name, yes).await,
         Cmd::Build {
             name,
             app,

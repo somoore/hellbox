@@ -1,0 +1,130 @@
+name: capsule-prebuilt
+
+# Compiles the aarch64 SDL2 stack and Chocolate Doom inside the exact capsule
+# base image, then attaches the tarball (attestation-signed) to the rolling
+# `capsule-prebuilt-1` release. The capsule Dockerfile downloads this with a
+# pinned SHA256 instead of compiling, which cuts the in-cloud image build from
+# about 6 minutes to about 1-2. Run manually after bumping any version below,
+# then update PREBUILT_SHA256 in capsule/Dockerfile with the printed hash.
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  SDL2_VERSION: 2.30.9
+  SDL2_SHA256: 24b574f71c87a763f50704bbb630cbe38298d544a1f890f099a4696b1d6beba4
+  SDL2_MIXER_VERSION: 2.8.0
+  SDL2_MIXER_SHA256: 1cfb34c87b26dbdbc7afd68c4f545c0116ab5f90bbfecc5aebe2a9cb4bb31549
+  SDL2_NET_VERSION: 2.2.0
+  SDL2_NET_SHA256: 4e4a891988316271974ff4e9585ed1ef729a123d22c08bd473129179dc857feb
+  CHOCOLATE_DOOM_VERSION: 3.0.1
+  CHOCOLATE_DOOM_SHA256: a54383beef6a52babc5b00d58fcf53a454f012ced7b1936ba359b13f1f10ac66
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    container:
+      # Must match the capsule Dockerfile's FROM digest so the binaries link
+      # against exactly the glibc and libraries they will run on.
+      image: public.ecr.aws/lambda/microvms:al2023-minimal@sha256:05cb9b38d841e7ff1b693dc9e894909612f340bf99ec97d426e8000a5bbe96c3
+    steps:
+      - name: Build SDL2 stack and Chocolate Doom
+        run: |
+          set -euo pipefail
+          dnf install -y gcc make autoconf automake libtool pkgconfig tar gzip xz \
+            libX11-devel libXext-devel pulseaudio-libs-devel alsa-lib-devel
+          for p in libXcursor-devel libXi-devel libXrandr-devel libXfixes-devel \
+              libXScrnSaver-devel libxkbcommon-devel; do
+            dnf install -y "$p" || echo "optional dep $p unavailable, skipping"
+          done
+          export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/lib64/pkgconfig
+
+          mkdir -p /tmp/sdl && cd /tmp/sdl
+          curl -fsSL --retry 3 -o sdl.tgz "https://github.com/libsdl-org/SDL/releases/download/release-${SDL2_VERSION}/SDL2-${SDL2_VERSION}.tar.gz"
+          printf '%s  %s\n' "$SDL2_SHA256" sdl.tgz | sha256sum -c -
+          tar -xzf sdl.tgz --strip-components=1
+          ./configure --disable-video-wayland --disable-video-opengl \
+            --disable-video-opengles --disable-video-vulkan \
+            --enable-video-x11 --enable-pulseaudio --enable-alsa --disable-sdltest
+          make -j"$(nproc)" && make install
+          echo "/usr/local/lib" > /etc/ld.so.conf.d/local.conf && ldconfig
+
+          mkdir -p /tmp/mixer && cd /tmp/mixer
+          curl -fsSL --retry 3 -o mixer.tgz "https://github.com/libsdl-org/SDL_mixer/releases/download/release-${SDL2_MIXER_VERSION}/SDL2_mixer-${SDL2_MIXER_VERSION}.tar.gz"
+          printf '%s  %s\n' "$SDL2_MIXER_SHA256" mixer.tgz | sha256sum -c -
+          tar -xzf mixer.tgz --strip-components=1
+          ./configure --disable-music-mod-mikmod --disable-music-midi-fluidsynth \
+            --disable-music-ogg --disable-music-flac --disable-music-mp3-mpg123 \
+            --disable-music-opus --disable-sdltest
+          make -j"$(nproc)" && make install && ldconfig
+
+          mkdir -p /tmp/net && cd /tmp/net
+          curl -fsSL --retry 3 -o net.tgz "https://github.com/libsdl-org/SDL_net/releases/download/release-${SDL2_NET_VERSION}/SDL2_net-${SDL2_NET_VERSION}.tar.gz"
+          printf '%s  %s\n' "$SDL2_NET_SHA256" net.tgz | sha256sum -c -
+          tar -xzf net.tgz --strip-components=1
+          ./configure --disable-sdltest && make -j"$(nproc)" && make install && ldconfig
+
+          mkdir -p /tmp/cdoom && cd /tmp/cdoom
+          curl -fsSL --retry 3 -o cdoom.tgz "https://github.com/chocolate-doom/chocolate-doom/archive/refs/tags/chocolate-doom-${CHOCOLATE_DOOM_VERSION}.tar.gz"
+          printf '%s  %s\n' "$CHOCOLATE_DOOM_SHA256" cdoom.tgz | sha256sum -c -
+          tar -xzf cdoom.tgz --strip-components=1
+          ./autogen.sh
+          ./configure --disable-sdltest CFLAGS="-O2 -fcommon"
+          make -j"$(nproc)"
+          install -m 0755 src/chocolate-doom /usr/local/bin/chocolate-doom
+
+          # Sanity: everything the binary needs resolves inside this base image.
+          ldconfig
+          if ldd /usr/local/bin/chocolate-doom | grep -q "not found"; then
+            echo "unresolved libraries:"; ldd /usr/local/bin/chocolate-doom; exit 1
+          fi
+
+          cd /
+          tar -czf /tmp/capsule-prebuilt-aarch64.tar.gz \
+            usr/local/lib usr/local/bin/chocolate-doom
+          sha256sum /tmp/capsule-prebuilt-aarch64.tar.gz
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: capsule-prebuilt
+          path: /tmp/capsule-prebuilt-aarch64.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      attestations: write
+      id-token: write
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: capsule-prebuilt
+
+      - name: Checksum
+        run: |
+          sha256sum capsule-prebuilt-aarch64.tar.gz | tee capsule-prebuilt-aarch64.tar.gz.sha256
+
+      - name: Attest
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: capsule-prebuilt-aarch64.tar.gz
+
+      - name: Publish to rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view capsule-prebuilt-1 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create capsule-prebuilt-1 --repo "$GITHUB_REPOSITORY" \
+              --title "Capsule prebuilt artifacts" \
+              --notes "Rolling release of the aarch64 SDL2 stack + Chocolate Doom, compiled inside the capsule base image by capsule-prebuilt.yml. The capsule Dockerfile pins this tarball's SHA256." \
+              --latest=false
+          gh release upload capsule-prebuilt-1 --repo "$GITHUB_REPOSITORY" --clobber \
+            capsule-prebuilt-aarch64.tar.gz capsule-prebuilt-aarch64.tar.gz.sha256
+          echo "== pin this in capsule/Dockerfile =="
+          cat capsule-prebuilt-aarch64.tar.gz.sha256

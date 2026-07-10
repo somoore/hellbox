@@ -259,8 +259,9 @@ The endpoint caps traffic at a size-dependent rate, so the codecs are a design l
 finishing touch. H.264 with motion-compensated P-frames (rather than VNC dirty rectangles)
 cuts the video bytes a lot for full-motion content, and Opus at 96 kbps (rather than raw PCM)
 cuts the audio bytes by about 13 to 15 times. Suspend-on-idle plus wake-on-traffic means an
-unwatched tab is not burning a running MicroVM; the proxy tracks live WebSocket sessions to
-drive that idle suspend.
+unwatched tab is not burning a running MicroVM: the platform `IdlePolicy` (set at `up`)
+auto-suspends after about 5 idle minutes, and an optional proxy-side timer
+(`idle_suspend_minutes`) can freeze it sooner by tracking live WebSocket sessions.
 
 ---
 
@@ -303,13 +304,13 @@ Hellbox/
 ├── uninstall.sh            # remove everything (MicroVM, image, stack, binary, local state)
 ├── deploy/doom.yaml        # CloudFormation: S3 bucket + IAM build/exec roles (Launch Stack)
 ├── capsule/                # the MicroVM image
-│   ├── Dockerfile          #   compiles pinned SDL2 + Chocolate Doom, verifies WAD SHA256
+│   ├── Dockerfile          #   installs the hash-pinned prebuilt SDL2 + Chocolate Doom, verifies WAD SHA256
 │   ├── rootfs/opt/capsule/ #   start.sh, run_app.sh, focus.py, *_ws.py
 │   └── app/                # optional WAD override drop zone (gitignored)
 ├── rs-cli/                 # the Rust `hellbox` CLI (shipped prebuilt; build only if you want)
 │   ├── Cargo.toml  Makefile
 │   └── src/                #   main, config, state, aws, poll, browser, proxy, embedded, commands/
-└── docs/                   # architecture, security, ground truth, media, generalizing
+└── docs/                   # cli, architecture, security, microvm-ground-truth
 ```
 
 Hellbox depends on the official `aws-sdk-lambdamicrovms` crate from crates.io. The capsule

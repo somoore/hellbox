@@ -57,8 +57,9 @@ hellbox destroy                 # remove everything, with a typed confirmation f
 - `deploy` only succeeds after end-to-end verification: the page answers on loopback, and
   the video, audio, and input WebSockets each complete a real handshake through the proxy
   into the VM.
-- `deploy edit` writes the built-in template to `~/.hellbox/stack.yaml` and opens your
-  editor. Later deploys use that copy. Delete the file to go back to the built-in template.
+- `deploy edit` writes the built-in template to `~/.hellbox/stack.yaml` and opens it in
+  `$VISUAL`/`$EDITOR` (falling back to `vi`, or `notepad` on Windows). Later deploys use
+  that copy. Delete the file to go back to the built-in template.
 - `destroy` first prints the exact resources it will remove (microvm, image, bucket, stack,
   local files, each with what it is and why) and requires you to type `destroy`. Scripts
   can pass `--yes` to skip the prompt. The ownership guardrails hold either way: the stack

@@ -4,8 +4,8 @@ How I run native DOOM inside an AWS Lambda MicroVM and stream it to a browser ta
 the design came from working around the platform's constraints, which I call out as I go.
 
 > **Status: proven end to end in three regions** (us-east-1, us-east-2, us-west-2). The
-> `hellbox` CLI drives the real control plane through the full lifecycle — one-command
-> `deploy`/`destroy` plus `build`, `up`, `open`, `suspend`, `resume`, `down` — with the
+> `hellbox` CLI drives the real control plane through the full lifecycle: one-command
+> `deploy`/`destroy` plus `build`, `up`, `open`, `suspend`, `resume`, `down`, with the
 > CloudFormation template and capsule build context embedded in the binary. Native
 > Chocolate Doom streams with video, audio, and keyboard input, and suspends and resumes
 > on a live memory snapshot. The API values below are ones I verified live; see
@@ -207,7 +207,7 @@ constraints at once (headless, no systemd, ARM64, a license I could ship):
   96 kbps in 20 ms frames, and sends raw Opus packets, decoded by the WebCodecs `AudioDecoder`.
 - **`input_ws.py` on :6904** turns JSON key and mouse events into XTEST `fake_input` calls
   through python-xlib. It retries its X connection while Xvnc finishes starting and runs
-  under a restart loop — a dead input channel baked into the snapshot bricks input for the
+  under a restart loop. A dead input channel baked into the snapshot bricks input for the
   image's whole life, which is also why the ready gate requires it to be listening.
 - **noVNC and websockify on :6901** is a single-socket fallback that carries display and
   input over one connection. The headless pixel checks use it.

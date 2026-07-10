@@ -1,7 +1,7 @@
 # Security Policy
 
-Hellbox is a single-user, own-AWS-account demo. The full threat model — trust
-boundaries, what protects you, and the deliberate non-goals — is documented in
+Hellbox is a single-user, own-AWS-account demo. The full threat model (trust
+boundaries, what protects you, and the deliberate non-goals) is documented in
 [docs/security.md](docs/security.md). Read that first; it is the authoritative description
 of the security posture.
 

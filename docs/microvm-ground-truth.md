@@ -29,20 +29,20 @@ the AWS docs for anything not listed here.
 
 ## Operations
 
-- `CreateMicrovmImage` — `POST /2025-09-09/microvm-images`; poll `GetMicrovmImage`
+- `CreateMicrovmImage` = `POST /2025-09-09/microvm-images`; poll `GetMicrovmImage`
   until state `CREATED` or `CREATE_FAILED`.
-- `RunMicrovm` — `POST /2025-09-09/microvms`; states `PENDING -> RUNNING ->
+- `RunMicrovm` = `POST /2025-09-09/microvms`; states `PENDING -> RUNNING ->
   SUSPENDING -> SUSPENDED -> TERMINATING -> TERMINATED`.
 - `GetMicrovm`, `ListMicrovms`, `ListMicrovmImages` (`GET /2025-09-09/microvm-images`,
   returns only live images), `ListManagedMicrovmImages`.
-- `SuspendMicrovm` / `ResumeMicrovm` — `POST .../{id}/suspend|resume`.
+- `SuspendMicrovm` / `ResumeMicrovm` = `POST .../{id}/suspend|resume`.
 - `TerminateMicrovm` = **DELETE** `.../microvms/{id}`.
-- `DeleteMicrovmImage` = **DELETE** `.../microvm-images/{FULL-ARN}` — the path segment
+- `DeleteMicrovmImage` = **DELETE** `.../microvm-images/{FULL-ARN}`. The path segment
   must be the full image ARN, not the bare name (a name returns 400 "Invalid ARN
   format"); colons in the path are fine unencoded.
 - **`DeleteMicrovmImage` is asynchronous** and the image *name* stays reserved while the
   delete completes (a minute or more). `CreateMicrovmImage` with the same name inside that
-  window either fails with "already exists" or — worse — appears to succeed and is then
+  window either fails with "already exists" or, worse, appears to succeed and is then
   swallowed by the completing delete (observed live: a create that never booted, no
   CloudWatch streams, and "No active version" forever). Retry the create until the name
   frees; the hellbox CLI does this automatically.

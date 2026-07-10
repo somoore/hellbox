@@ -45,12 +45,12 @@ flowchart LR
   `is_loopback_authority` and `cookie_has_control_secret` in `rs-cli/src/proxy.rs` and their
   tests.
 - **Fetch-metadata navigation gate.** The data-plane paths accept top-level document
-  navigations (any initiator — omnibox or a link click) but refuse embedding
+  navigations (any initiator, omnibox or a link click) but refuse embedding
   (`Sec-Fetch-Dest: iframe`/`object`, which would gain cookie-bearing same-origin
   WebSocket access) and scripted cross-site subresource loads. See
   `is_top_level_navigation` in `rs-cli/src/proxy.rs`.
 - **Launch Stack template bucket.** The template bucket serves `doom.yaml` only to
-  requests made *via CloudFormation* (`aws:CalledVia` condition, TLS required) — anonymous
+  requests made *via CloudFormation* (`aws:CalledVia` condition, TLS required). Anonymous
   internet reads get 403, while the console's Launch Stack flow works from any account.
 - **Firecracker isolation in your own account.** No shared multi-tenant surface.
 - **Least-privilege IAM.** The build role has only `s3:GetObject` on the artifact bucket plus
@@ -90,7 +90,7 @@ The parts I deliberately left out of scope:
   Lambda-managed defaults (JWE-authenticated ingress, internet egress). The MicroVM can reach
   the internet; it does not need to (the WAD and engine are baked at build time), but it is not
   network-isolated by default. **To lock egress down,** set `egress_connector_arn` in
-  `~/.hellbox/config.toml` to a connector that denies all outbound — `hellbox up` wires any
+  `~/.hellbox/config.toml` to a connector that denies all outbound; `hellbox up` wires any
   non-empty `egress_connector_arn` into `RunMicrovm` (see `up.rs`; leave it empty for the
   managed default). The runtime MicroVM needs no outbound, so a deny-all egress connector is
   safe.

@@ -99,3 +99,36 @@ jobs:
           files: |
             rs-cli/${{ matrix.asset }}
             rs-cli/${{ matrix.asset }}.sha256
+
+  # Submit the new version to microsoft/winget-pkgs. Needs a classic PAT with
+  # `public_repo` scope in the WINGET_TOKEN secret (wingetcreate forks/PRs
+  # winget-pkgs under that identity); skips cleanly when the secret is absent.
+  # The Homebrew tap needs nothing here: somoore/homebrew-hellbox polls
+  # releases itself and attestation-verifies before bumping its formula.
+  winget:
+    name: winget submit
+    needs: build
+    runs-on: windows-latest
+    permissions: {}
+    steps:
+      - name: Submit somoore.hellbox update
+        shell: pwsh
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          if (-not $env:WINGET_TOKEN) {
+            Write-Host "WINGET_TOKEN not set - skipping winget submission"
+            exit 0
+          }
+          $ErrorActionPreference = "Stop"
+          $wcVersion = "v1.12.8.0"
+          $wcSha256 = "8BD738851B524885410112678E3771B341C5C716DE60FBBECB88AB0A363ED85D"
+          curl.exe -fsSL -o wingetcreate.exe "https://github.com/microsoft/winget-create/releases/download/$wcVersion/wingetcreate.exe"
+          $actual = (Get-FileHash wingetcreate.exe -Algorithm SHA256).Hash
+          if ($actual -ne $wcSha256) { throw "wingetcreate.exe SHA256 mismatch: $actual" }
+          $tag = $env:GITHUB_REF_NAME
+          $version = $tag.TrimStart("v")
+          $base = "https://github.com/somoore/hellbox/releases/download/$tag"
+          .\wingetcreate.exe update somoore.hellbox --version $version `
+            --urls "$base/hellbox-windows-x86_64.exe" "$base/hellbox-windows-arm64.exe" `
+            --submit --token $env:WINGET_TOKEN

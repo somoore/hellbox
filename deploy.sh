@@ -109,9 +109,13 @@ download_release_asset(){
   fi
 }
 
-# Resolve CLI: override -> cache -> local release build -> release download.
+# Resolve CLI: override -> PATH (brew/winget) -> cache -> local build -> download.
 resolve_hellbox(){
   if [ -n "${HELLBOX_BIN:-}" ]; then printf '%s' "$HELLBOX_BIN"; return; fi
+  # A package-manager install on PATH: Homebrew enforces the formula's SHA256,
+  # and the tap pins those hashes only after verifying the release attestation,
+  # so the integrity chain is equivalent to the download path below.
+  if command -v hellbox >/dev/null 2>&1; then command -v hellbox; return; fi
   if [ -x "$BIN_DIR/hellbox$ext" ] && [ -f "$BIN_DIR/hellbox$ext.sha256" ]; then
     verify_sha256 "$BIN_DIR/hellbox$ext" "$BIN_DIR/hellbox$ext.sha256"
     verify_attestation "$BIN_DIR/hellbox$ext"

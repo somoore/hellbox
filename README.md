@@ -56,6 +56,12 @@ off.
 > To remove everything: press `Ctrl-C` to stop the proxy, then run `./uninstall.sh` (it stops
 > any running proxy and deletes the MicroVM, the image, the stack, and all local state).
 
+> **Package managers:** prefer one? `brew install somoore/hellbox/hellbox` (macOS/Linux)
+> or `winget install somoore.hellbox` (Windows) installs the CLI; `deploy.sh` picks up a
+> `hellbox` on PATH automatically. Update with `brew upgrade hellbox` /
+> `winget upgrade somoore.hellbox`; remove with `brew uninstall hellbox` /
+> `winget uninstall somoore.hellbox`.
+
 > **Browser:** the low-latency H.264/Opus path uses WebCodecs, so use current Chrome or Edge
 > for the intended experience. Safari and Firefox support may lag; use `hellbox config set
 > display vnc` for the noVNC fallback if the WebCodecs page cannot decode video or audio.

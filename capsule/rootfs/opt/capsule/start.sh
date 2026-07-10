@@ -48,8 +48,14 @@ LOG "websockify :6901 -> 5901 (pid $!)"
 # H.264 video on :6903.
 DISPLAY=:1 python3.11 /opt/capsule/video_ws.py > /var/log/video_ws.log 2>&1 &
 LOG "video_ws (H.264) :6903 (pid $!)"
-DISPLAY=:1 python3.11 /opt/capsule/input_ws.py > /var/log/input_ws.log 2>&1 &
-LOG "input_ws (XTEST) :6904 (pid $!)"
+# Supervised: a dead input channel at snapshot time bricks input for every
+# run/resume of the image, so restart it if it ever exits.
+( while :; do
+    DISPLAY=:1 python3.11 /opt/capsule/input_ws.py >> /var/log/input_ws.log 2>&1
+    LOG "input_ws exited rc=$? -- restarting in 2s"
+    sleep 2
+  done ) &
+LOG "input_ws (XTEST) :6904 supervisor pid $!"
 DISPLAY_OK=0
 for _ in $(seq 1 50); do
   curl -sf -o /dev/null --max-time 2 http://127.0.0.1:6901/vnc.html && { DISPLAY_OK=1; break; }
@@ -95,10 +101,12 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   # Latch once a bright frame proves DOOM rendered.
   [ "${MEAN:-0}" -ge "$RENDER_MIN" ] && RENDER_SEEN=1
   LOG "gate: display=$DISPLAY_OK audio=$AUDIO_OK services(6902/3/4)=$SVC_OK render_mean=$MEAN render_seen=$RENDER_SEEN"
-  # Do not gate on audio/video/input ports; render is the real snapshot signal.
-  if [ "$DISPLAY_OK" = 1 ] && [ "$RENDER_SEEN" = 1 ]; then
+  # Gate on the stream/input ports too: the snapshot freezes whatever is (not)
+  # listening, so a dead service here means a dead service on every run/resume.
+  # Better a loud CREATE_FAILED than a silently input-less image.
+  if [ "$DISPLAY_OK" = 1 ] && [ "$RENDER_SEEN" = 1 ] && [ "$SVC_OK" = 1 ]; then
     touch "$READY_FLAG"
-    LOG "READY: display + DOOM rendered (render_seen; last mean=$MEAN); audio=$AUDIO_OK services_probe=$SVC_OK; /ready -> 200"
+    LOG "READY: display + DOOM rendered + services 6902/3/4 up (last mean=$MEAN); audio=$AUDIO_OK; /ready -> 200"
     break
   fi
   sleep 2

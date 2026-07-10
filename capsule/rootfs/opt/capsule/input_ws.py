@@ -5,6 +5,8 @@ Receives JSON keyboard/mouse events and injects them into X display :1 via XTEST
 """
 import asyncio
 import json
+import sys
+import time
 
 import websockets
 from Xlib import X, display, XK
@@ -12,7 +14,24 @@ from Xlib.ext import xtest
 
 PORT = 6904
 
-d = display.Display(':1')
+
+def _connect_display():
+    """Connect to :1, retrying while Xvnc finishes starting.
+
+    The X socket file appears before Xvnc accepts clients; a one-shot
+    connect here loses that race, dies silently, and the image snapshot
+    bakes in a capsule with no input channel.
+    """
+    for _ in range(120):
+        try:
+            return display.Display(':1')
+        except Exception:
+            time.sleep(1)
+    print('input_ws: X display :1 never accepted a connection', file=sys.stderr)
+    raise SystemExit(1)
+
+
+d = _connect_display()
 _screen = d.screen()
 SCREEN_W = int(_screen.width_in_pixels)
 SCREEN_H = int(_screen.height_in_pixels)

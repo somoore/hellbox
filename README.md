@@ -37,10 +37,10 @@ hellbox deploy
 ```
 
 That's the whole install. `hellbox deploy` creates the AWS prerequisites, builds the DOOM
-MicroVM image in the cloud (about 6 minutes, since it compiles the engine and fetches the
-shareware WAD there, not on your machine), launches it, verifies the video, audio, and
-input streams end to end, and opens the tab. No repo clone needed. The CloudFormation
-template and the image build context ship inside the binary.
+MicroVM image in the cloud (about 4 to 5 minutes; the engine comes prebuilt from CI and
+the shareware WAD is fetched there, nothing compiles on your machine), launches it,
+verifies the video, audio, and input streams end to end, and opens the tab. No repo clone
+needed. The CloudFormation template and the image build context ship inside the binary.
 
 In the tab: click the speaker icon for sound, click the game, and play. `W A S D` to move,
 `Ctrl` to fire, `Space` to open doors. The **Suspend** button freezes the MicroVM and stops
@@ -134,8 +134,9 @@ release builds:
 
 - A small **prerequisites stack** (CloudFormation): one private S3 bucket for build
   contexts and two least-privilege IAM roles. That's all the standing infrastructure.
-- The **DOOM capsule**: a MicroVM image, built in the cloud from a Dockerfile that compiles
-  SDL2 and Chocolate Doom and bakes in the shareware WAD, plus the running MicroVM itself.
+- The **DOOM capsule**: a MicroVM image, built in the cloud from a Dockerfile that installs
+  a CI-prebuilt SDL2 + Chocolate Doom stack (hash-pinned, attestation-signed) and bakes in
+  the shareware WAD, plus the running MicroVM itself.
 
 **If you use the CLI, this part is automatic.** `hellbox deploy` creates the stack, builds
 the image, and launches the MicroVM for you. There is nothing to click and no

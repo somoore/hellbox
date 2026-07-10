@@ -74,7 +74,7 @@ Lambda MicroVMs are opinionated. Each constraint below shaped the design.
 | Constraint | What it meant for the design |
 |---|---|
 | **ARM64 only** | DOOM is a native aarch64 build (Chocolate Doom), so it runs directly on the ARM CPU with no translation layer and renders reliably across the fleet. macOS is out of scope. |
-| **No SDL2 in Amazon Linux 2023** (no EPEL) | The Dockerfile compiles the SDL stack from source: SDL2, SDL2_mixer, SDL2_net, then Chocolate Doom. |
+| **No SDL2 in Amazon Linux 2023** (no EPEL) | The SDL stack (SDL2, SDL2_mixer, SDL2_net) and Chocolate Doom are compiled once in CI inside the exact base image and shipped as a hash-pinned, attestation-signed tarball the Dockerfile downloads. That cut the cloud image build from about 6.5 minutes to about 4.5. |
 | **HTTPS and WSS ingress only** (no raw TCP) | Everything is tunnelled over WebSockets: H.264 video, Opus audio, and a JSON input channel, plus a noVNC fallback. |
 | **Auth is the `X-aws-proxy-auth` header** | The token has to be in the header; the same token in a query string returns 403. Browsers cannot set the header, so I run a loopback proxy (section 5). |
 | **Lifecycle hooks are ENABLED/DISABLED toggles** | Hooks are switches, not script paths: `microvmImageHooks.ready`, `microvmHooks.run` and `resume`, plus `*TimeoutInSeconds` and `hooks.port`. I send `readyTimeoutInSeconds=600`. |
@@ -100,7 +100,7 @@ sequenceDiagram
     CLI->>CLI: zip capsule (Dockerfile + rootfs + DOOM1.WAD)
     CLI->>S3: put_object context.zip
     CLI->>CP: create_microvm_image (base image, build role, readyTimeout 600)
-    Note over CP: builds the Dockerfile (compiles SDL2 + Chocolate Doom),<br/>boots, snapshots when /ready on :9000 returns 200
+    Note over CP: builds the Dockerfile (installs prebuilt SDL2 + Chocolate Doom),<br/>boots, snapshots when /ready on :9000 returns 200
     loop poll until terminal
         CLI->>CP: get_microvm_image
         CP-->>CLI: CREATING then CREATED (or CREATE_FAILED)
@@ -284,7 +284,7 @@ Full threat model in [security.md](security.md).
 
 | Concern | Choice | Why |
 |---|---|---|
-| DOOM on ARM64 | **Chocolate Doom** (native aarch64, SDL2) | Runs natively on ARM with no translation layer, and SDL2 gives real audio and input. Compiled from source because AL2023 ships no SDL2. |
+| DOOM on ARM64 | **Chocolate Doom** (native aarch64, SDL2) | Runs natively on ARM with no translation layer, and SDL2 gives real audio and input. Prebuilt in CI (capsule-prebuilt.yml) because AL2023 ships no SDL2. |
 | Display | **Xvnc (TigerVNC) at 640x400** | A headless X server sized to the engine window, so the whole desktop is DOOM and the render gate can detect it. |
 | Video | **ffmpeg x11grab to libx264 to WebCodecs** | An inter-frame codec over WebSockets, far less egress than VNC dirty rectangles for full-motion content. |
 | Audio | **PulseAudio to Opus to WebCodecs** | About 13 to 15 times less egress than raw PCM at transparent quality. |

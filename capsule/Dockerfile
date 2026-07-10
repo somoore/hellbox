@@ -8,20 +8,20 @@ ARG FFMPEG_ASSET=ffmpeg-n8.1.2-linuxarm64-gpl-8.1.tar.xz
 ARG FFMPEG_SHA256=42be928da25b3e1f7dc271b78a0087dbfcf4738df1d7bf46d158a86eedb285da
 ARG NOVNC_VERSION=1.5.0
 ARG NOVNC_SHA256=6a73e41f98388a5348b7902f54b02d177cb73b7e5eb0a7a0dcf688cc2c79b42a
-ARG SDL2_VERSION=2.30.9
-ARG SDL2_SHA256=24b574f71c87a763f50704bbb630cbe38298d544a1f890f099a4696b1d6beba4
-ARG SDL2_MIXER_VERSION=2.8.0
-ARG SDL2_MIXER_SHA256=1cfb34c87b26dbdbc7afd68c4f545c0116ab5f90bbfecc5aebe2a9cb4bb31549
-ARG SDL2_NET_VERSION=2.2.0
-ARG SDL2_NET_SHA256=4e4a891988316271974ff4e9585ed1ef729a123d22c08bd473129179dc857feb
-ARG CHOCOLATE_DOOM_VERSION=3.0.1
-ARG CHOCOLATE_DOOM_SHA256=a54383beef6a52babc5b00d58fcf53a454f012ced7b1936ba359b13f1f10ac66
+# SDL2 stack + Chocolate Doom, compiled once in CI inside this exact base image
+# (.github/workflows/capsule-prebuilt.yml, attestation-signed). Downloading it
+# here instead of compiling cuts the cloud image build by several minutes.
+ARG PREBUILT_RELEASE=capsule-prebuilt-1
+ARG PREBUILT_ASSET=capsule-prebuilt-aarch64.tar.gz
+ARG PREBUILT_SHA256=acb6a458a36e2a532be8698e64b13121b1aaee96cff302478f278d8a1c7ca9ee
 ARG DOOM1_WAD_COMMIT=fcf22d9773c62835724f2d25c40933ef051f6600
 ARG DOOM1_WAD_SHA256=1d7d43be501e67d927e415e0b8f3e29c3bf33075e859721816f652a526cac771
 
 # Display, audio, build/runtime deps.
+# findutils is explicit: the compiler toolchain used to drag it in transitively,
+# and run_app.sh's WAD discovery dies without `find`.
 RUN dnf install -y tigervnc-server xterm xsetroot python3.11 python3.11-pip tar gzip xz binutils which procps-ng \
-        shadow-utils pulseaudio pulseaudio-utils \
+        shadow-utils pulseaudio pulseaudio-utils findutils \
     && dnf clean all
 # SDL/X/audio runtime libs.
 RUN dnf install -y glib2 libX11 libXext libXrender libXrandr libXcursor libXfixes \
@@ -59,58 +59,19 @@ RUN set -e; \
     ln -s "/opt/noVNC-${NOVNC_VERSION}" /opt/novnc; \
     rm -f /tmp/novnc.tgz
 
-# Build SDL2 + Chocolate Doom from source.
-RUN dnf install -y gcc make autoconf automake libtool pkgconfig \
-        libX11-devel libXext-devel pulseaudio-libs-devel alsa-lib-devel \
-    && dnf clean all
-RUN for p in libXcursor-devel libXi-devel libXrandr-devel libXfixes-devel \
-        libXScrnSaver-devel libxkbcommon-devel; do \
-      dnf install -y "$p" || echo "[build] optional dep $p unavailable, skipping"; \
-    done; dnf clean all || true
-ENV PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/lib64/pkgconfig
-
-# SDL2: X11 video, PulseAudio/ALSA audio, no GL/Wayland/Vulkan.
-WORKDIR /tmp/sdl
-RUN curl -fsSL --retry 3 -o sdl.tgz "https://github.com/libsdl-org/SDL/releases/download/release-${SDL2_VERSION}/SDL2-${SDL2_VERSION}.tar.gz" \
-    && printf '%s  %s\n' "$SDL2_SHA256" sdl.tgz | sha256sum -c - \
-    && tar -xzf sdl.tgz --strip-components=1 \
-    && ./configure --disable-video-wayland --disable-video-opengl \
-        --disable-video-opengles --disable-video-vulkan \
-        --enable-video-x11 --enable-pulseaudio --enable-alsa --disable-sdltest \
-    && make -j"$(nproc)" && make install \
-    && echo "/usr/local/lib" > /etc/ld.so.conf.d/local.conf && ldconfig \
-    && rm -rf /tmp/sdl
-WORKDIR /
-
-# SDL2_mixer and SDL2_net against source SDL2.
-WORKDIR /tmp/mixer
-RUN curl -fsSL --retry 3 -o mixer.tgz "https://github.com/libsdl-org/SDL_mixer/releases/download/release-${SDL2_MIXER_VERSION}/SDL2_mixer-${SDL2_MIXER_VERSION}.tar.gz" \
-    && printf '%s  %s\n' "$SDL2_MIXER_SHA256" mixer.tgz | sha256sum -c - \
-    && tar -xzf mixer.tgz --strip-components=1 \
-    && ./configure --disable-music-mod-mikmod --disable-music-midi-fluidsynth \
-        --disable-music-ogg --disable-music-flac --disable-music-mp3-mpg123 \
-        --disable-music-opus --disable-sdltest \
-    && make -j"$(nproc)" && make install && ldconfig && rm -rf /tmp/mixer
-WORKDIR /tmp/net
-RUN curl -fsSL --retry 3 -o net.tgz "https://github.com/libsdl-org/SDL_net/releases/download/release-${SDL2_NET_VERSION}/SDL2_net-${SDL2_NET_VERSION}.tar.gz" \
-    && printf '%s  %s\n' "$SDL2_NET_SHA256" net.tgz | sha256sum -c - \
-    && tar -xzf net.tgz --strip-components=1 \
-    && ./configure --disable-sdltest && make -j"$(nproc)" && make install && ldconfig \
-    && rm -rf /tmp/net
-WORKDIR /
-
-# Chocolate Doom.
-WORKDIR /tmp/cdoom
-RUN curl -fsSL --retry 3 -o cdoom.tgz "https://github.com/chocolate-doom/chocolate-doom/archive/refs/tags/chocolate-doom-${CHOCOLATE_DOOM_VERSION}.tar.gz" \
-    && printf '%s  %s\n' "$CHOCOLATE_DOOM_SHA256" cdoom.tgz | sha256sum -c - \
-    && tar -xzf cdoom.tgz --strip-components=1 \
-    && ./autogen.sh \
-    && ./configure --disable-sdltest CFLAGS="-O2 -fcommon" \
-    && make -j"$(nproc)" \
-    && install -m 0755 src/chocolate-doom /usr/local/bin/chocolate-doom \
-    && echo "native chocolate-doom at:" && ls -la /usr/local/bin/chocolate-doom \
-    && rm -rf /tmp/cdoom
-WORKDIR /
+# Prebuilt SDL2 stack + Chocolate Doom (compiled in CI inside this base image).
+RUN set -e; \
+    curl -fsSL --retry 3 --max-time 240 -o /tmp/prebuilt.tgz \
+      "https://github.com/somoore/hellbox/releases/download/${PREBUILT_RELEASE}/${PREBUILT_ASSET}"; \
+    printf '%s  %s\n' "$PREBUILT_SHA256" /tmp/prebuilt.tgz | sha256sum -c -; \
+    tar -xzf /tmp/prebuilt.tgz -C /; \
+    rm -f /tmp/prebuilt.tgz; \
+    echo "/usr/local/lib" > /etc/ld.so.conf.d/local.conf && ldconfig; \
+    if ldd /usr/local/bin/chocolate-doom | grep -q "not found"; then \
+      echo "FATAL: chocolate-doom has unresolved libraries"; \
+      ldd /usr/local/bin/chocolate-doom; exit 1; \
+    fi; \
+    echo "native chocolate-doom at:" && ls -la /usr/local/bin/chocolate-doom
 
 # Stage app WADs, or fetch shareware DOOM1.WAD.
 COPY app/ /home/app/app/

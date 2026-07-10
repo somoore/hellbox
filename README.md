@@ -56,11 +56,25 @@ off.
 > To remove everything: press `Ctrl-C` to stop the proxy, then run `./uninstall.sh` (it stops
 > any running proxy and deletes the MicroVM, the image, the stack, and all local state).
 
-> **Package managers:** prefer one? `brew install somoore/hellbox/hellbox` (macOS/Linux)
-> or `winget install somoore.hellbox` (Windows) installs the CLI; `deploy.sh` picks up a
-> `hellbox` on PATH automatically. Update with `brew upgrade hellbox` /
-> `winget upgrade somoore.hellbox`; remove with `brew uninstall hellbox` /
-> `winget uninstall somoore.hellbox`.
+### Prefer Homebrew? (macOS / Linux)
+
+Install the CLI from the [tap](https://github.com/somoore/homebrew-hellbox), then run the
+same Quickstart — `deploy.sh` detects a `hellbox` on PATH and skips the download:
+
+```bash
+brew install somoore/hellbox/hellbox   # install the CLI
+git clone https://github.com/somoore/hellbox
+cd hellbox
+./deploy.sh                            # uses the brew-installed hellbox
+```
+
+Stay current with `brew upgrade hellbox`; remove with `brew uninstall hellbox` (then
+`./uninstall.sh` for the AWS side). The tap re-pins its formula from each GitHub release
+only after verifying the binaries' build-provenance attestations, and Homebrew enforces
+those SHA256s at install time.
+
+On Windows, `winget install somoore.hellbox` / `winget upgrade` / `winget uninstall` do
+the same job.
 
 > **Browser:** the low-latency H.264/Opus path uses WebCodecs, so use current Chrome or Edge
 > for the intended experience. Safari and Firefox support may lag; use `hellbox config set

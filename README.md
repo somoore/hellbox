@@ -15,6 +15,8 @@
 Suspend it mid firefight and the compute bill stops. Resume it and you are back on the exact
 frame, same demon mid lunge, same health, same ammo.
 
+<img src="docs/assets/hellbox-demo.gif" alt="Hellbox demo: DOOM streamed from an AWS Lambda MicroVM to a browser — new game, gameplay, suspended mid-fight, resumed on the same frame" width="760">
+
 </div>
 
 ---

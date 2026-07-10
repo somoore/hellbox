@@ -55,8 +55,13 @@ hellbox destroy --yes           # remove microvm, image, bucket contents, stack,
   proxy into the VM.
 - `deploy edit` writes the built-in template to `~/.hellbox/stack.yaml` and opens your
   editor; later deploys use that copy. Delete the file to return to the built-in template.
-- `destroy` refuses to run without `--yes`. It leaves `~/.hellbox/` itself in place (a
-  cached binary may live there) but removes `config.toml` and `state.json`.
+- `destroy` first prints the exact resource list (microvm, image, bucket, stack, local
+  files — each with why) and requires typing `destroy` to proceed; `--yes` skips the
+  prompt for scripts. Ownership guardrails hold either way: the stack is only deleted if
+  it carries the Hellbox template markers, and the bucket is only emptied if it is the
+  one that verified stack reports as its own output — any mismatch aborts everything.
+  Nothing Hellbox didn't create is ever touched. Locally it removes `config.toml` and
+  `state.json`, leaving `~/.hellbox/` itself in place.
 
 ### Lifecycle
 

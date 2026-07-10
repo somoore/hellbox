@@ -40,6 +40,10 @@ brew install somoore/hellbox/hellbox    # macOS/Linux (Windows: grab the exe fro
 hellbox deploy
 ```
 
+<details>
+<summary><b>What that does, how to play, and how to come back later</b></summary>
+<br>
+
 That's the whole install. `hellbox deploy` creates the AWS prerequisites, builds the DOOM
 MicroVM image in the cloud (about 4 to 5 minutes; the engine comes prebuilt from CI and
 the shareware WAD is fetched there, nothing compiles on your machine), launches it,
@@ -59,6 +63,8 @@ hellbox    # same as `hellbox play`: reconnect, resume, or relaunch, then open t
 Suspended machines only persist for about 8 hours before AWS terminates them, so after a
 few days away your machine is usually gone. `hellbox` figures that out and relaunches from
 your image. Takes about 15 seconds.
+
+</details>
 
 <details>
 <summary><b>Everyday commands</b></summary>

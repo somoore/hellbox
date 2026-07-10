@@ -44,6 +44,14 @@ flowchart LR
   `resume`. A cross-origin, DNS-rebound, or blind local request gets a 403. See
   `is_loopback_authority` and `cookie_has_control_secret` in `rs-cli/src/proxy.rs` and their
   tests.
+- **Fetch-metadata navigation gate.** The data-plane paths accept top-level document
+  navigations (any initiator — omnibox or a link click) but refuse embedding
+  (`Sec-Fetch-Dest: iframe`/`object`, which would gain cookie-bearing same-origin
+  WebSocket access) and scripted cross-site subresource loads. See
+  `is_top_level_navigation` in `rs-cli/src/proxy.rs`.
+- **Launch Stack template bucket.** The template bucket serves `doom.yaml` only to
+  requests made *via CloudFormation* (`aws:CalledVia` condition, TLS required) — anonymous
+  internet reads get 403, while the console's Launch Stack flow works from any account.
 - **Firecracker isolation in your own account.** No shared multi-tenant surface.
 - **Least-privilege IAM.** The build role has only `s3:GetObject` on the artifact bucket plus
   CloudWatch Logs writes. The execution role has no permissions, since the MicroVM never calls
@@ -69,9 +77,11 @@ The parts I deliberately left out of scope:
   repo's [GitHub Releases](https://github.com/somoore/hellbox/releases), verifies the
   release SHA256 sidecar, and verifies the GitHub artifact attestation when `gh` is available.
   Release builds are produced by the [release workflow](../.github/workflows/release.yml) from
-  this source. To avoid trusting a prebuilt artifact, build it yourself (`cd rs-cli && make
-  release`) and point `deploy.sh` at it with `HELLBOX_BIN`. The binary runs locally with your
-  credentials, so only run a release you trust.
+  this source. The Homebrew tap pins SHA256s into its formula only after verifying the same
+  attestations, and Homebrew enforces those hashes at install time. To avoid trusting a
+  prebuilt artifact, build it yourself (`cd rs-cli && make release`) and point `deploy.sh`
+  at it with `HELLBOX_BIN`. The binary runs locally with your credentials, so only run a
+  release you trust.
 - **Entropy after a snapshot.** A resumed MicroVM replays frozen entropy, so a CSPRNG seeded
   before the snapshot repeats its output. AWS terminates TLS, so the hop inside the MicroVM is
   plain and this is not exercised here. A capsule that terminates TLS inside the MicroVM must

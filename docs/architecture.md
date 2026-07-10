@@ -4,11 +4,12 @@ How I run native DOOM inside an AWS Lambda MicroVM and stream it to a browser ta
 the design came from working around the platform's constraints, which I call out as I go.
 
 > **Status: proven end to end in three regions** (us-east-1, us-east-2, us-west-2). The
-> `hellbox` CLI drives the real control plane through the full lifecycle
-> (`build`, `up`, `open`, `suspend`, `resume`, `down`). Native Chocolate Doom streams with
-> video, audio, and keyboard input, and suspends and resumes on a live memory snapshot. The
-> API values below are ones I verified live; see
-> [microvm-ground-truth.md](microvm-ground-truth.md).
+> `hellbox` CLI drives the real control plane through the full lifecycle — one-command
+> `deploy`/`destroy` plus `build`, `up`, `open`, `suspend`, `resume`, `down` — with the
+> CloudFormation template and capsule build context embedded in the binary. Native
+> Chocolate Doom streams with video, audio, and keyboard input, and suspends and resumes
+> on a live memory snapshot. The API values below are ones I verified live; see
+> [microvm-ground-truth.md](microvm-ground-truth.md). CLI usage lives in [cli.md](cli.md).
 
 **How to read this:** sections 1-3 explain the flow, sections 4-7 cover the hard parts that
 made the demo work, and sections 8-9 list the implementation choices and repo layout.
@@ -107,10 +108,11 @@ sequenceDiagram
     CLI->>CLI: persist image_arn to state.json
 ```
 
-> The snapshot is captured the moment `/ready` returns 200, so the capsule holds `/ready` at
-> 503 until DOOM has drawn a non-black frame (a python-xlib center-crop brightness probe).
-> That way the snapshot always catches a live game. The build runs two concurrent boots and
-> both have to reach ready.
+> The snapshot is captured the moment `/ready` returns 200, so the capsule holds `/ready`
+> at 503 until DOOM has drawn a non-black frame (a python-xlib center-crop brightness
+> probe) **and** the audio/video/input services are listening on 6902-6904. A dead service
+> at snapshot time would be dead on every future run and resume, so it fails the build
+> loudly instead. The build runs two concurrent boots and both have to reach ready.
 
 ### 3.2 Run and open
 
@@ -170,7 +172,8 @@ proxy, section 5) keeps working even while the MicroVM is frozen and the stream 
 ## 4. Inside the capsule
 
 `start.sh` brings the stack up in dependency order, runs the readiness responder on `:9000`,
-and holds `/ready` at 503 until DOOM is drawn. The display is Xvnc `:1` at 640x400 to match
+and holds `/ready` at 503 until DOOM is drawn and the stream/input services are listening.
+The display is Xvnc `:1` at 640x400 to match
 Chocolate Doom's window, so the whole desktop is DOOM and the render probe reads a real frame
 instead of a black border.
 
@@ -203,7 +206,9 @@ constraints at once (headless, no systemd, ARM64, a license I could ship):
 - **`audio_ws.py` on :6902** runs `parec` on the PulseAudio sink monitor, encodes Opus at
   96 kbps in 20 ms frames, and sends raw Opus packets, decoded by the WebCodecs `AudioDecoder`.
 - **`input_ws.py` on :6904** turns JSON key and mouse events into XTEST `fake_input` calls
-  through python-xlib.
+  through python-xlib. It retries its X connection while Xvnc finishes starting and runs
+  under a restart loop — a dead input channel baked into the snapshot bricks input for the
+  image's whole life, which is also why the ready gate requires it to be listening.
 - **noVNC and websockify on :6901** is a single-socket fallback that carries display and
   input over one connection. The headless pixel checks use it.
 
@@ -281,7 +286,7 @@ Full threat model in [security.md](security.md).
 | Audio | **PulseAudio to Opus to WebCodecs** | About 13 to 15 times less egress than raw PCM at transparent quality. |
 | Input | **XTEST (python-xlib) over WebSockets** | A reverse channel for the H.264 path, with `focus.py` keeping the game window focused. |
 | Stream auth | **Fork B loopback proxy** (`hellbox open`) | Browsers cannot set `X-aws-proxy-auth`, so a header-injecting loopback proxy is the only path that works. |
-| CLI | **Rust** | One distributable binary using the official `aws-sdk-lambdamicrovms` crate (no `aws` CLI shell-out). SigV4 signing name is `lambda`. Ships prebuilt via GitHub Releases for Linux, macOS, and Windows on x86_64 and arm64. Source in `rs-cli/`. |
+| CLI | **Rust** | One distributable binary using the official `aws-sdk-lambdamicrovms` crate (no `aws` CLI shell-out); adaptive SDK retry (backoff + client-side rate limiting). The CloudFormation template and capsule are embedded, so `hellbox deploy` needs no clone. Ships prebuilt (attestation-signed) via GitHub Releases and a Homebrew tap for Linux, macOS, and Windows on x86_64 and arm64. Source in `rs-cli/`. |
 | Infra | **CloudFormation** (`deploy/doom.yaml`) | One self-serve stack: an S3 artifact bucket and the build and execution IAM roles. |
 
 ---

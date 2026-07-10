@@ -40,6 +40,12 @@ the AWS docs for anything not listed here.
 - `DeleteMicrovmImage` = **DELETE** `.../microvm-images/{FULL-ARN}` — the path segment
   must be the full image ARN, not the bare name (a name returns 400 "Invalid ARN
   format"); colons in the path are fine unencoded.
+- **`DeleteMicrovmImage` is asynchronous** and the image *name* stays reserved while the
+  delete completes (a minute or more). `CreateMicrovmImage` with the same name inside that
+  window either fails with "already exists" or — worse — appears to succeed and is then
+  swallowed by the completing delete (observed live: a create that never booted, no
+  CloudWatch streams, and "No active version" forever). Retry the create until the name
+  frees; the hellbox CLI does this automatically.
 - **Wake on traffic:** any data-plane request to a SUSPENDED MicroVM auto-resumes it. To
   keep a suspended MicroVM paused, poll state via the control plane (`GetMicrovm` does not
   resume), not by hitting the endpoint.

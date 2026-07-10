@@ -100,6 +100,26 @@ jobs:
             rs-cli/${{ matrix.asset }}
             rs-cli/${{ matrix.asset }}.sha256
 
+  # Nudge the Homebrew tap to pick this release up immediately. The tap polls
+  # every 6h on its own (no secret needed for that); this job just removes the
+  # lag. Needs a fine-grained PAT with actions:write on somoore/homebrew-hellbox
+  # in the TAP_TOKEN secret; skips cleanly when absent.
+  brew-tap:
+    name: brew tap bump
+    needs: build
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Dispatch tap formula update
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "TAP_TOKEN not set — tap will self-update within 6h via its cron"
+            exit 0
+          fi
+          GH_TOKEN="$TAP_TOKEN" gh workflow run update-formula --repo somoore/homebrew-hellbox
+
   # Submit the new version to microsoft/winget-pkgs. Needs a classic PAT with
   # `public_repo` scope in the WINGET_TOKEN secret (wingetcreate forks/PRs
   # winget-pkgs under that identity); skips cleanly when the secret is absent.

@@ -152,63 +152,12 @@ and Opus audio over WebSockets, the browser decodes them with WebCodecs, and key
 flows back over a third WebSocket. Suspend/resume is a live memory snapshot — the control
 panel in the page keeps working even while the machine is frozen.
 
-Full design: [docs/architecture.md](docs/architecture.md) · threat model:
-[docs/security.md](docs/security.md) · verified API facts:
-[docs/microvm-ground-truth.md](docs/microvm-ground-truth.md)
+## Docs
 
-<details>
-<summary><b>Configuration</b> (environment variables)</summary>
-
-| Variable | Default | What it does |
-|---|---|---|
-| `AWS_REGION` | `us-east-1` | Region to deploy into (any region with Lambda MicroVMs works; `hellbox deploy -r` overrides). |
-| `HELLBOX_NAME` | `doom` | Capsule name for `deploy.sh` (the CLI uses `--name`). |
-| `HELLBOX_STACK` | `Hellbox` | CloudFormation stack name. |
-| `HELLBOX_REPO` | `somoore/hellbox` | Release repo `deploy.sh` downloads `hellbox` from. |
-| `HELLBOX_VERSION` | latest release | Pin the `hellbox` binary to a specific release tag. |
-| `HELLBOX_SKIP_ATTESTATION` | `0` | Set to `1` only if you deliberately want to skip `gh attestation verify`. |
-| `HELLBOX_HOME` | `~/.hellbox` | Where config, state, and the cached binary live. |
-| `HELLBOX_BIN` | none | Use a specific local `hellbox` binary. |
-
-</details>
-
-<details>
-<summary><b>Drive each piece by hand</b> (without <code>hellbox deploy</code> or <code>deploy.sh</code>)</summary>
-
-**1. Create the prerequisites stack** — Launch Stack button above, or
-`aws cloudformation deploy --region us-east-1 --stack-name Hellbox --template-file
-deploy/doom.yaml --capabilities CAPABILITY_IAM`.
-
-**2. Write `~/.hellbox/config.toml`** from the stack Outputs (all five keys required;
-`display` optional — `h264` is the low-latency WebCodecs path):
-
-```toml
-region             = "us-east-1"
-artifact_bucket    = "<ArtifactBucket output>"
-build_role_arn     = "<BuildRoleArn output>"
-execution_role_arn = "<ExecutionRoleArn output>"
-base_image_arn     = "arn:aws:lambda:us-east-1:aws:microvm-image:al2023-1"
-display            = "h264"
-```
-
-**3. Drive the lifecycle:**
-
-```bash
-hellbox build      # zip capsule -> S3 -> build image (compiles engine, fetches WAD)
-hellbox up         # launch a MicroVM from the image
-hellbox open       # mint a token, start the proxy, open the tab
-hellbox suspend    # freeze (billing stops)
-hellbox resume     # thaw on the exact frame
-hellbox down       # terminate the MicroVM (keeps the image)
-hellbox rm         # terminate and delete the image
-hellbox ps         # list capsules
-```
-
-`hellbox build` uses `./capsule` when run from a clone, or the capsule embedded in the
-binary otherwise; `--capsule-dir` points it anywhere else (e.g. to stage your own WAD —
-see [capsule/app/](capsule/app/)).
-
-</details>
+- **[CLI reference](docs/cli.md)** — every command, configuration, and troubleshooting
+- **[Architecture](docs/architecture.md)** — the full design and the platform constraints that shaped it
+- **[Security](docs/security.md)** — trust boundaries, what protects you, deliberate non-goals
+- **[MicroVM ground truth](docs/microvm-ground-truth.md)** — live-verified Lambda MicroVMs API facts
 
 ## Legal
 

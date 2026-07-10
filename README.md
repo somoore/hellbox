@@ -46,6 +46,14 @@ In the tab: click the speaker icon for sound, click the game, and play — `W A 
 `Ctrl` to fire, `Space` to open doors. The **Suspend** button freezes the MicroVM and stops
 compute billing; **Resume** restores the exact frame.
 
+Coming back later — an hour, a week? One word gets you playing again, whatever state
+things are in (suspended machines auto-terminate after ~8 hours; `hellbox` relaunches
+from the image and picks up):
+
+```bash
+hellbox                       # same as `hellbox play`: reconnect, resume, or relaunch — then open
+```
+
 ```bash
 hellbox suspend               # freeze (compute billing stops)
 hellbox resume                # thaw on the exact frame

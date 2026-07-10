@@ -16,14 +16,24 @@ mod proxy;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "hellbox", version, about)]
+#[command(
+    name = "hellbox",
+    version,
+    about,
+    after_help = "Running `hellbox` with no command is the same as `hellbox play`."
+)]
 struct Cli {
     #[command(subcommand)]
-    cmd: Cmd,
+    cmd: Option<Cmd>,
 }
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Get DOOM on screen, whatever it takes (default when no command given).
+    Play {
+        #[arg(long, default_value = "doom")]
+        name: String,
+    },
     /// One-command install: AWS prerequisites stack, image build, launch, open.
     Deploy {
         #[command(subcommand)]
@@ -130,7 +140,10 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
-    match cli.cmd {
+    match cli.cmd.unwrap_or(Cmd::Play {
+        name: "doom".to_string(),
+    }) {
+        Cmd::Play { name } => commands::play::run(&name).await,
         Cmd::Deploy {
             action: Some(DeployAction::Edit),
             ..

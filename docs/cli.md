@@ -25,6 +25,19 @@ attestations; Homebrew then enforces the pinned SHA256 at install time.
 
 `--name` defaults to `doom` everywhere, so the common case needs no flags.
 
+### Play
+
+```
+hellbox                         # bare command = `hellbox play`
+hellbox play                    # get DOOM on screen, whatever it takes
+```
+
+Reconciles local state with AWS and recovers from wherever things stand: a RUNNING
+capsule opens immediately; a SUSPENDED one opens the paused page (clicking **Resume** is
+your deliberate restart of billing); a terminated or expired one (suspended MicroVMs only
+persist ~8 hours) is relaunched from the image; no image at all points you to
+`hellbox deploy`. Every path ends with the proxy verified and a tab open.
+
 ### Deployment
 
 ```

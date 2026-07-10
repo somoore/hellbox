@@ -22,7 +22,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1.1"
 directories = "6"          # ~/.hellbox on mac/win/linux
-getrandom = "0.3"          # per-session loopback control secret
+getrandom = "0.4"          # per-session loopback control secret
 
 # AWS
 aws-config = "1"

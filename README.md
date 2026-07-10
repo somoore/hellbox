@@ -30,7 +30,7 @@ MicroVMs feel real instead of abstract.
 You need AWS credentials configured (the AWS CLI, SSO, or environment variables). Then:
 
 ```bash
-brew install somoore/hellbox/hellbox    # macOS/Linux — or: winget install somoore.hellbox
+brew install somoore/hellbox/hellbox    # macOS/Linux (Windows: grab the exe from Releases)
 hellbox deploy
 ```
 
@@ -61,7 +61,7 @@ does the same thing (and uses a `hellbox` already on your PATH).
 > roughly $0.19/hour before data transfer. The MicroVM auto-suspends after ~5 idle minutes
 > and wakes on traffic. When you're done for good: `hellbox destroy --yes`.
 
-> **Updating:** `brew upgrade hellbox` / `winget upgrade somoore.hellbox`. To rebuild the
+> **Updating:** `brew upgrade hellbox`. To rebuild the
 > MicroVM image on a new version: `hellbox rm`, then `hellbox deploy`.
 
 > **Browser:** the low-latency H.264/Opus path uses WebCodecs — use current Chrome or Edge.
@@ -88,7 +88,6 @@ GitHub release builds:
 | Channel | Install | Update | Remove |
 |---|---|---|---|
 | Homebrew | `brew install somoore/hellbox/hellbox` | `brew upgrade hellbox` | `brew uninstall hellbox` |
-| winget | `winget install somoore.hellbox` | `winget upgrade somoore.hellbox` | `winget uninstall somoore.hellbox` |
 | GitHub Releases | [download](https://github.com/somoore/hellbox/releases) (or let `deploy.sh` fetch + verify) | rerun `deploy.sh` | delete the binary |
 | Source | `cd rs-cli && make release` | `git pull` + rebuild | — |
 

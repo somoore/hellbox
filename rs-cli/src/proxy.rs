@@ -561,16 +561,27 @@ fn has_local_session(headers: &HeaderMap, secret: &str) -> bool {
 }
 
 fn allowed_initial_navigation(req: &Request<Incoming>) -> bool {
-    if req.method() != hyper::Method::GET || req.uri().path() != "/" {
-        return false;
-    }
-    match req
-        .headers()
-        .get("sec-fetch-site")
-        .and_then(|v| v.to_str().ok())
-    {
-        Some("same-origin" | "none") | None => true,
-        Some(_) => false,
+    req.method() == hyper::Method::GET
+        && req.uri().path() == "/"
+        && is_top_level_navigation(req.headers())
+}
+
+fn is_top_level_navigation(headers: &HeaderMap) -> bool {
+    let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+    match header("sec-fetch-mode") {
+        // Fetch-metadata browser: allow any TOP-LEVEL document navigation
+        // (omnibox, bookmarks, and cross-site link clicks all deserve the
+        // page), but refuse embedding (iframe/object would gain cookie-bearing
+        // same-origin WS access) and scripted subresource loads.
+        Some(mode) => {
+            mode.eq_ignore_ascii_case("navigate")
+                && header("sec-fetch-dest").is_none_or(|d| d.eq_ignore_ascii_case("document"))
+        }
+        // No fetch metadata (curl, older browsers): keep the site heuristic.
+        None => matches!(
+            header("sec-fetch-site"),
+            Some("same-origin" | "none") | None
+        ),
     }
 }
 
@@ -1113,6 +1124,50 @@ mod tests {
         );
         let out = build_upstream_headers(&inbound, "the.secret.jwe", 6901);
         assert_eq!(out.get("cookie").unwrap(), "foo=bar");
+    }
+
+    #[test]
+    fn top_level_navigation_gate() {
+        let hm = |pairs: &[(&str, &str)]| {
+            let mut h = HeaderMap::new();
+            for (k, v) in pairs {
+                h.insert(
+                    HeaderName::from_bytes(k.as_bytes()).unwrap(),
+                    HeaderValue::from_str(v).unwrap(),
+                );
+            }
+            h
+        };
+        // Real top-level navigations pass regardless of site (omnibox,
+        // bookmark, or a cross-site link click from Slack/docs).
+        assert!(is_top_level_navigation(&hm(&[
+            ("sec-fetch-mode", "navigate"),
+            ("sec-fetch-dest", "document"),
+            ("sec-fetch-site", "cross-site"),
+        ])));
+        assert!(is_top_level_navigation(&hm(&[
+            ("sec-fetch-mode", "navigate"),
+            ("sec-fetch-dest", "document"),
+            ("sec-fetch-site", "none"),
+        ])));
+        // Embedding and scripted loads are refused.
+        assert!(!is_top_level_navigation(&hm(&[
+            ("sec-fetch-mode", "navigate"),
+            ("sec-fetch-dest", "iframe"),
+            ("sec-fetch-site", "cross-site"),
+        ])));
+        assert!(!is_top_level_navigation(&hm(&[
+            ("sec-fetch-mode", "no-cors"),
+            ("sec-fetch-dest", "image"),
+            ("sec-fetch-site", "cross-site"),
+        ])));
+        // No fetch metadata (curl, older browsers): site heuristic applies.
+        assert!(is_top_level_navigation(&hm(&[])));
+        assert!(is_top_level_navigation(&hm(&[("sec-fetch-site", "none")])));
+        assert!(!is_top_level_navigation(&hm(&[(
+            "sec-fetch-site",
+            "cross-site"
+        )])));
     }
 
     #[test]

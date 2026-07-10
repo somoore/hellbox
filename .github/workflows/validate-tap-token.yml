@@ -1,0 +1,25 @@
+name: validate-tap-token
+
+# Manual check that the TAP_TOKEN secret works: performs the same cross-repo
+# dispatch the release pipeline's brew-tap job does. Run it after setting or
+# rotating the token (the tap run it triggers just no-ops when already current).
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch tap updater with TAP_TOKEN
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "::error::TAP_TOKEN secret is empty or unset"
+            exit 1
+          fi
+          GH_TOKEN="$TAP_TOKEN" gh workflow run update-formula --repo somoore/homebrew-hellbox
+          echo "TAP_TOKEN works — dispatched update-formula on somoore/homebrew-hellbox"

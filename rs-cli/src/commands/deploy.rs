@@ -40,9 +40,10 @@ pub fn edit() -> Result<()> {
         std::fs::write(&path, STACK_TEMPLATE)
             .with_context(|| format!("writing {}", path.display()))?;
     }
+    let fallback_editor = if cfg!(windows) { "notepad" } else { "vi" };
     let editor = std::env::var("VISUAL")
         .or_else(|_| std::env::var("EDITOR"))
-        .unwrap_or_else(|_| "vi".to_string());
+        .unwrap_or_else(|_| fallback_editor.to_string());
     let status = std::process::Command::new(&editor)
         .arg(&path)
         .status()
@@ -72,7 +73,7 @@ fn parse_parameters(raw: &[String]) -> Result<Vec<Parameter>> {
 }
 
 pub async fn run(name: &str, region_flag: Option<&str>, parameters: &[String]) -> Result<()> {
-    let region = resolve_region(region_flag);
+    let region = resolve_region(region_flag).await;
     let stack = std::env::var("HELLBOX_STACK")
         .ok()
         .filter(|s| !s.trim().is_empty())
@@ -81,6 +82,11 @@ pub async fn run(name: &str, region_flag: Option<&str>, parameters: &[String]) -
     let params = parse_parameters(parameters)?;
 
     let sdk = aws::sdk_config(&region).await;
+    let identity = aws::preflight_identity(&sdk).await?;
+    println!(
+        "==> AWS identity: {} (account {})",
+        identity.arn, identity.account
+    );
     let cfn = CfnClient::new(&sdk);
 
     println!("==> Deploying AWS prerequisites  (stack: {stack}, region: {region})");
@@ -92,7 +98,7 @@ pub async fn run(name: &str, region_flag: Option<&str>, parameters: &[String]) -
     }
     ensure_stack(&cfn, &stack, &template, &params).await?;
 
-    let cfg = write_config(&cfn, &stack, &region).await?;
+    let cfg = write_config(&cfn, &stack, &region, &identity).await?;
     println!("==> Wrote {}", Config::path()?.display());
 
     println!(
@@ -108,13 +114,24 @@ pub async fn run(name: &str, region_flag: Option<&str>, parameters: &[String]) -
     super::open::run_with_verify(name, false, true).await
 }
 
-fn resolve_region(flag: Option<&str>) -> String {
+async fn resolve_region(flag: Option<&str>) -> String {
     let env = |k: &str| std::env::var(k).ok().filter(|s| !s.trim().is_empty());
-    flag.map(str::to_string)
+    if let Some(r) = flag
+        .map(str::to_string)
         .or_else(|| env("AWS_REGION"))
         .or_else(|| env("AWS_DEFAULT_REGION"))
         .or_else(|| Config::load().ok().map(|c| c.region))
-        .unwrap_or_else(|| DEFAULT_REGION.to_string())
+    {
+        return r;
+    }
+    // The active AWS profile's `region =` (~/.aws/config), like the AWS CLI uses.
+    if let Some(r) = aws_config::meta::region::RegionProviderChain::default_provider()
+        .region()
+        .await
+    {
+        return r.to_string();
+    }
+    DEFAULT_REGION.to_string()
 }
 
 /// Create the stack, or update it if it already exists; idempotent reruns
@@ -204,8 +221,14 @@ fn error_says(msg: &Option<&str>, needle: &str) -> bool {
 }
 
 /// Read stack Outputs and write ~/.hellbox/config.toml, preserving any
-/// existing display/idle/port settings.
-async fn write_config(cfn: &CfnClient, stack: &str, region: &str) -> Result<Config> {
+/// existing display/idle/port settings. Records the account (and profile,
+/// best effort) so later commands can catch a wrong-profile mixup.
+async fn write_config(
+    cfn: &CfnClient,
+    stack: &str,
+    region: &str,
+    identity: &aws::Identity,
+) -> Result<Config> {
     let out = cfn
         .describe_stacks()
         .stack_name(stack)
@@ -262,6 +285,10 @@ async fn write_config(cfn: &CfnClient, stack: &str, region: &str) -> Result<Conf
             .and_then(|c| c.display.clone())
             .or_else(|| Some("h264".to_string())),
         idle_suspend_minutes: existing.and_then(|c| c.idle_suspend_minutes),
+        aws_account_id: Some(identity.account.clone()),
+        aws_profile: std::env::var("AWS_PROFILE")
+            .ok()
+            .filter(|p| !p.trim().is_empty()),
     };
     cfg.save()?;
     Ok(cfg)

@@ -40,6 +40,13 @@ pub struct Config {
     pub display: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idle_suspend_minutes: Option<u64>,
+    /// Which account `hellbox deploy` set this config up for; play/destroy
+    /// refuse to act when the current credentials point somewhere else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aws_account_id: Option<String>,
+    /// Best-effort record of the AWS_PROFILE in use at deploy time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aws_profile: Option<String>,
 }
 
 fn default_region() -> String {
@@ -67,9 +74,8 @@ impl Config {
         let path = Self::path()?;
         let text = std::fs::read_to_string(&path).with_context(|| {
             format!(
-                "no config at {} — deploy `deploy/doom.yaml` (the Launch Stack button \
-                 or `aws cloudformation deploy`) and copy the stack Outputs there \
-                 (region, artifact_bucket, build_role_arn, execution_role_arn). See README.",
+                "no config at {} — run `hellbox deploy` to set everything up \
+                 (it creates the AWS prerequisites and writes this file for you)",
                 path.display()
             )
         })?;

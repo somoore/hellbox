@@ -24,7 +24,12 @@ pub async fn run(name: &str, yes: bool) -> Result<()> {
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "Hellbox".to_string());
 
-    let aws = Aws::new(&cfg).await?;
+    // Credentials must work AND point at the account this config was written
+    // for; destroying "Hellbox" in some other account would be someone else's.
+    let sdk = crate::aws::sdk_config(&cfg.region).await;
+    let identity = crate::aws::preflight_identity(&sdk).await?;
+    crate::aws::require_same_account(&cfg, &identity)?;
+    let aws = Aws::from_sdk_config(&sdk);
     let capsule = state.get(name).cloned();
 
     // Build the exact plan first, verifying ownership of everything on it.

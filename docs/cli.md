@@ -97,9 +97,34 @@ hellbox config set idle_suspend_minutes N   # proxy-side auto-suspend when no vi
 hellbox config unset <key>
 ```
 
+## Credentials
+
+hellbox reads AWS credentials exactly the way the AWS CLI v2 does, through the SDK's
+default provider chain: environment variables, `~/.aws/credentials` and `~/.aws/config`
+profiles (`AWS_PROFILE` respected), IAM Identity Center / SSO login sessions, and
+`credential_process` helpers like Granted's `assume`. If `aws sts get-caller-identity`
+works in your shell, hellbox works.
+
+Commands that touch AWS start with an identity check. If credentials are missing or
+expired you get a plain explanation and the usual fixes (`aws sso login`, `assume`,
+`AWS_PROFILE`) instead of an SDK stack trace. `hellbox deploy` prints the identity it is
+about to use and records the account id (and `AWS_PROFILE`, when set) in `config.toml`.
+`hellbox play` and `hellbox destroy` compare the current account against that record and
+refuse to act on a mismatch, so switching profiles can never point a destroy at the wrong
+account.
+
+Region resolution for `deploy`: the `-r` flag, then `AWS_REGION`, then
+`AWS_DEFAULT_REGION`, then an existing `config.toml`, then your AWS profile's `region`
+setting, then `us-east-1`.
+
 ## Configuration files
 
-Everything lives under `~/.hellbox/` (override with `HELLBOX_HOME`):
+Everything lives under `~/.hellbox/` (override with `HELLBOX_HOME`). On Windows that is
+`C:\Users\<you>\.hellbox`; the path comes from the OS profile API, not a guessed `$HOME`.
+Uninstalling the binary (brew, winget, or deleting the exe) leaves this directory alone,
+so a reinstall picks up your deployment exactly where you left it. Only `hellbox destroy`
+removes `config.toml` and `state.json`, and only after tearing down the AWS resources they
+describe.
 
 | File | What it is |
 |---|---|

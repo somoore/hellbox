@@ -22,7 +22,11 @@ pub async fn run(name: &str) -> Result<()> {
         None => bail!("no capsule named '{name}' — run `hellbox deploy` first"),
     };
 
-    let aws = Aws::new(&cfg).await?;
+    // Friendly credential check + wrong-account guard before touching anything.
+    let sdk = crate::aws::sdk_config(&cfg.region).await;
+    let identity = crate::aws::preflight_identity(&sdk).await?;
+    crate::aws::require_same_account(&cfg, &identity)?;
+    let aws = Aws::from_sdk_config(&sdk);
 
     // Reconcile with AWS; this is also the credentials check.
     let live_state = match &capsule.microvm_id {

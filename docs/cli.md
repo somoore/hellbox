@@ -50,9 +50,10 @@ hellbox deploy edit             # customize the stack template in $EDITOR
 hellbox destroy                 # remove everything, with a typed confirmation first
 ```
 
-- `deploy` is idempotent. An existing stack gets updated, or left alone if nothing changed,
-  and a rerun right after `destroy` rides through the service's asynchronous image
-  deletion.
+- `deploy` is idempotent. An existing stack gets updated or left alone, an existing image
+  is reused (run `hellbox rm` first when you want a rebuild), an already-running machine is
+  reconnected instead of duplicated, and a rerun right after `destroy` rides through the
+  service's asynchronous image deletion.
 - `deploy` only succeeds after end-to-end verification: the page answers on loopback, and
   the video, audio, and input WebSockets each complete a real handshake through the proxy
   into the VM.
@@ -85,6 +86,9 @@ hellbox ps [--refresh]          # list capsules; --refresh reconciles against AW
   [capsule/app/](../capsule/app/README.md)).
 - `open` runs in the foreground. `Ctrl-C` stops the proxy. The MicroVM keeps running and
   auto-suspends after about 5 idle minutes.
+- Auth tokens live about 30 minutes. The proxy notices an expired one (upstream 401/403),
+  mints a fresh token, and retries transparently, so long sessions and late page reloads
+  just keep working.
 - The in-page **Suspend/Resume** panel keeps working while the machine is frozen. Those
   calls go through the proxy's local control endpoints, not the (dead) stream.
 

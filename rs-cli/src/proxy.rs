@@ -228,10 +228,10 @@ async fn handle_http(
         .context("reading inbound body")?
         .to_bytes();
 
-    let resp = match client
-        .request(method, &upstream)
+    let mut resp = match client
+        .request(method.clone(), &upstream)
         .headers(fwd_headers)
-        .body(body_bytes)
+        .body(body_bytes.clone())
         .send()
         .await
     {
@@ -250,6 +250,21 @@ async fn handle_http(
             return Err(e).with_context(|| format!("forwarding to {upstream}"));
         }
     };
+
+    // The auth token lives ~30 minutes; a page load after it expires would
+    // surface the endpoint's 403. Mint a fresh token and retry once instead.
+    if matches!(resp.status().as_u16(), 401 | 403) && try_refresh_token(&cfg).await {
+        let retry_headers = build_upstream_headers(&parts.headers, &cfg.upstream.token(), port);
+        if let Ok(r) = client
+            .request(method, &upstream)
+            .headers(retry_headers)
+            .body(body_bytes)
+            .send()
+            .await
+        {
+            resp = r;
+        }
+    }
 
     let status = resp.status();
     // Suspended/failed root: keep the Resume UI reachable.
@@ -325,6 +340,39 @@ async fn handle_http(
     Ok(response)
 }
 
+fn build_ws_request(
+    upstream: &str,
+    token: &str,
+    port: i32,
+    subprotocol: &Option<HeaderValue>,
+) -> Result<tokio_tungstenite::tungstenite::handshake::client::Request> {
+    let mut up_req = upstream
+        .to_string()
+        .into_client_request()
+        .with_context(|| format!("building upstream WS request for {upstream}"))?;
+    let h = up_req.headers_mut();
+    h.insert(
+        HeaderName::from_static("x-aws-proxy-auth"),
+        HeaderValue::from_str(token).context("auth header")?,
+    );
+    h.insert(
+        HeaderName::from_static("x-aws-proxy-port"),
+        HeaderValue::from_str(&port.to_string()).context("port header")?,
+    );
+    if let Some(sp) = subprotocol {
+        h.insert("Sec-WebSocket-Protocol", sp.clone());
+    }
+    Ok(up_req)
+}
+
+fn ws_error_is_auth(e: &tokio_tungstenite::tungstenite::Error) -> bool {
+    matches!(
+        e,
+        tokio_tungstenite::tungstenite::Error::Http(resp)
+            if matches!(resp.status().as_u16(), 401 | 403)
+    )
+}
+
 async fn handle_ws(req: Request<Incoming>, cfg: Arc<ProxyConfig>) -> Result<Response<Full<Bytes>>> {
     let key = req
         .headers()
@@ -342,28 +390,24 @@ async fn handle_ws(req: Request<Incoming>, cfg: Arc<ProxyConfig>) -> Result<Resp
         .to_string();
 
     let upstream = format!("wss://{}{}", cfg.upstream.host(), path);
-    let mut up_req = upstream
-        .clone()
-        .into_client_request()
-        .with_context(|| format!("building upstream WS request for {upstream}"))?;
-    {
-        let h = up_req.headers_mut();
-        h.insert(
-            HeaderName::from_static("x-aws-proxy-auth"),
-            HeaderValue::from_str(&cfg.upstream.token()).context("auth header")?,
-        );
-        h.insert(
-            HeaderName::from_static("x-aws-proxy-port"),
-            HeaderValue::from_str(&cfg.port_for(&path).to_string()).context("port header")?,
-        );
-        if let Some(sp) = &subprotocol {
-            h.insert("Sec-WebSocket-Protocol", sp.clone());
-        }
-    }
+    let port = cfg.port_for(&path);
+    let up_req = build_ws_request(&upstream, &cfg.upstream.token(), port, &subprotocol)?;
 
-    let (upstream_ws, _resp) = tokio_tungstenite::connect_async(up_req)
-        .await
-        .with_context(|| format!("connecting upstream WSS {upstream}"))?;
+    let (upstream_ws, _resp) = match tokio_tungstenite::connect_async(up_req).await {
+        Ok(v) => v,
+        // Expired token: mint a fresh one and retry the handshake once.
+        Err(e) if ws_error_is_auth(&e) && try_refresh_token(&cfg).await => {
+            let retry = build_ws_request(&upstream, &cfg.upstream.token(), port, &subprotocol)?;
+            tokio_tungstenite::connect_async(retry)
+                .await
+                .with_context(|| {
+                    format!("connecting upstream WSS {upstream} (after token refresh)")
+                })?
+        }
+        Err(e) => {
+            return Err(e).with_context(|| format!("connecting upstream WSS {upstream}"));
+        }
+    };
 
     // Count the pump as one live session.
     let on_upgrade = hyper::upgrade::on(req);
@@ -752,6 +796,25 @@ async fn handle_control(
 
 async fn current_state(ctrl: &ProxyControl) -> Result<String> {
     microvm_state(&ctrl.microvm, &ctrl.microvm_id).await
+}
+
+/// Mint a fresh auth token and swap it into the shared upstream. Returns
+/// false when there is no control plane or the mint fails (e.g. suspended).
+async fn try_refresh_token(cfg: &ProxyConfig) -> bool {
+    let Some(ctrl) = &cfg.control else {
+        return false;
+    };
+    match mint_token(ctrl).await {
+        Ok(token) => {
+            ctrl.upstream.set(ctrl.upstream.host(), token);
+            tracing::info!(target: "hellbox::proxy", "auth token refreshed after upstream 401/403");
+            true
+        }
+        Err(e) => {
+            tracing::debug!(target: "hellbox::proxy", "token refresh failed: {e:#}");
+            false
+        }
+    }
 }
 
 async fn do_suspend(ctrl: &ProxyControl) -> Result<String> {

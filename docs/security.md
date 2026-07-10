@@ -52,6 +52,12 @@ flowchart LR
 - **Launch Stack template bucket.** The template bucket serves `doom.yaml` only to
   requests made *via CloudFormation* (`aws:CalledVia` condition, TLS required). Anonymous
   internet reads get 403, while the console's Launch Stack flow works from any account.
+- **Wrong-account guard.** `hellbox deploy` records the account id it set things up in;
+  `play` and `destroy` compare the current credentials against it and refuse to act on a
+  mismatch, so a profile mixup can never aim a teardown at the wrong account. `destroy`
+  additionally requires a typed confirmation and only deletes resources that prove they
+  are Hellbox's (stack template markers, bucket cross-checked against the stack's own
+  outputs).
 - **Firecracker isolation in your own account.** No shared multi-tenant surface.
 - **Least-privilege IAM.** The build role has only `s3:GetObject` on the artifact bucket plus
   CloudWatch Logs writes. The execution role has no permissions, since the MicroVM never calls

@@ -14,6 +14,12 @@ use crate::config::Config;
 use crate::state::State;
 
 pub async fn run(name: &str) -> Result<()> {
+    run_with_verify(name, false).await
+}
+
+/// `strict` makes the final end-to-end stream verification fatal (deploy uses
+/// this); plain `hellbox play` treats a failed channel as a warning.
+pub async fn run_with_verify(name: &str, strict: bool) -> Result<()> {
     let cfg = Config::load()?;
     let mut state = State::load()?;
 
@@ -70,9 +76,13 @@ pub async fn run(name: &str) -> Result<()> {
             if capsule.image_arn.is_none() && capsule.image_version.is_none() {
                 bail!("capsule '{name}' has no image — run `hellbox deploy`");
             }
-            println!(
-                "==> '{name}' is not running (suspended MicroVMs only persist ~8h) — relaunching"
-            );
+            if capsule.microvm_id.is_some() {
+                println!(
+                    "==> '{name}' is not running (suspended MicroVMs only persist ~8h) — relaunching"
+                );
+            } else {
+                println!("==> '{name}' has no running machine — launching");
+            }
             state.upsert(name, |c| {
                 c.microvm_id = None;
                 c.endpoint = None;
@@ -81,5 +91,5 @@ pub async fn run(name: &str) -> Result<()> {
         }
     }
 
-    super::open::run(name, false).await
+    super::open::run_with_verify(name, false, strict).await
 }

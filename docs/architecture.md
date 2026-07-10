@@ -241,6 +241,10 @@ A path-prefix table maps one loopback origin onto the four internal services via
 `X-aws-proxy-port`: `/hellbox/audio` to 6902, `/hellbox/video` to 6903, `/hellbox/input` to 6904,
 and everything else to the display port 6901.
 
+Tokens expire after about 30 minutes, so the proxy treats an upstream 401/403 as "token
+went stale": it mints a fresh one with your credentials, swaps it in, and retries the
+request or WebSocket handshake once. Long play sessions never notice.
+
 The `/__hellbox/*` endpoints run AWS calls with your credentials, so they are hardened
 against CSRF, DNS rebinding, and blind local calls: the `Host` header must be loopback, the
 `Origin` (when present) must be the loopback origin, the request must carry the per-session
@@ -304,7 +308,7 @@ Hellbox/
 │   └── app/                # optional WAD override drop zone (gitignored)
 ├── rs-cli/                 # the Rust `hellbox` CLI (shipped prebuilt; build only if you want)
 │   ├── Cargo.toml  Makefile
-│   └── src/                #   main, config, state, aws, poll, browser, proxy, commands/
+│   └── src/                #   main, config, state, aws, poll, browser, proxy, embedded, commands/
 └── docs/                   # architecture, security, ground truth, media, generalizing
 ```
 

@@ -101,17 +101,24 @@ pub async fn run(name: &str, region_flag: Option<&str>, parameters: &[String]) -
     let cfg = write_config(&cfn, &stack, &region, &identity).await?;
     println!("==> Wrote {}", Config::path()?.display());
 
-    println!(
-        "==> Building the DOOM MicroVM image  (compiles the engine + fetches the WAD; a few minutes)"
-    );
-    super::build::run(name, None, None).await?;
-    println!("==> Launching the MicroVM");
-    super::up::run(name).await?;
-    println!("==> Opening DOOM  (http://127.0.0.1:6080)");
+    // Idempotent rerun: if this capsule's image already exists and is active,
+    // reuse it instead of failing the build step. `hellbox rm` first to rebuild.
+    if existing_image_active(&sdk, name).await {
+        println!(
+            "==> Image for '{name}' already exists — reusing it (run `hellbox rm` first to rebuild)"
+        );
+    } else {
+        println!(
+            "==> Building the DOOM MicroVM image  (compiles the engine + fetches the WAD; a few minutes)"
+        );
+        super::build::run(name, None, None).await?;
+    }
     let _ = cfg; // config is read from disk by the subcommands
     // strict: deploy only succeeds once the page and every stream channel
     // (video/audio/input) verify end to end through the proxy into the VM.
-    super::open::run_with_verify(name, false, true).await
+    // play handles launch-if-needed, so a rerun never starts a second machine.
+    println!("==> Launching DOOM  (http://127.0.0.1:6080)");
+    super::play::run_with_verify(name, true).await
 }
 
 async fn resolve_region(flag: Option<&str>) -> String {
@@ -218,6 +225,27 @@ async fn ensure_stack(
 
 fn error_says(msg: &Option<&str>, needle: &str) -> bool {
     msg.map(|m| m.contains(needle)).unwrap_or(false)
+}
+
+/// True when local state records an image for this capsule and the service
+/// reports it CREATED with an active version.
+async fn existing_image_active(sdk: &aws_config::SdkConfig, name: &str) -> bool {
+    let Some(arn) = crate::state::State::load()
+        .ok()
+        .and_then(|s| s.get(name).and_then(|c| c.image_arn.clone()))
+    else {
+        return false;
+    };
+    let client = aws_sdk_lambdamicrovms::Client::new(sdk);
+    match client
+        .get_microvm_image()
+        .image_identifier(&arn)
+        .send()
+        .await
+    {
+        Ok(out) => out.state().as_str() == "CREATED" && out.latest_active_image_version().is_some(),
+        Err(_) => false,
+    }
 }
 
 /// Read stack Outputs and write ~/.hellbox/config.toml, preserving any

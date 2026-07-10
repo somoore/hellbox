@@ -1,9 +1,9 @@
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hellbox-wordmark-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="docs/assets/hellbox-wordmark-light.png">
-  <img src="docs/assets/hellbox-wordmark-dark.png" alt="Hellbox" width="320">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hellbox-wordmark-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/hellbox-wordmark-light.svg">
+  <img src="docs/assets/hellbox-wordmark-dark.svg" alt="Hellbox" width="360">
 </picture>
 
 [![CI](https://github.com/somoore/hellbox/actions/workflows/ci.yml/badge.svg)](https://github.com/somoore/hellbox/actions/workflows/ci.yml)

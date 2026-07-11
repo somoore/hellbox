@@ -103,10 +103,12 @@ enum Cmd {
         #[arg(long, default_value = "doom")]
         name: String,
     },
-    /// List known capsules.
+    /// List known capsules. Reconciles state against AWS by default; the
+    /// platform can suspend a MicroVM on its own, so the local cache goes stale
+    /// while hellbox isn't running. Use --no-refresh for a fast offline read.
     Ps {
         #[arg(long)]
-        refresh: bool,
+        no_refresh: bool,
     },
 }
 
@@ -176,6 +178,6 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Resume { name } => commands::resume::run(&name).await,
         Cmd::Down { name } => commands::down::run(&name).await,
         Cmd::Rm { name } => commands::rm::run(&name).await,
-        Cmd::Ps { refresh } => commands::ps::run(refresh).await,
+        Cmd::Ps { no_refresh } => commands::ps::run(!no_refresh).await,
     }
 }

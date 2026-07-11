@@ -79,7 +79,7 @@ hellbox suspend                 # freeze the machine (compute billing stops)
 hellbox resume                  # thaw on the exact frame
 hellbox down                    # terminate the MicroVM (keeps the image for a fast `up`)
 hellbox rm                      # terminate and delete the image
-hellbox ps [--refresh]          # list capsules; --refresh reconciles against AWS
+hellbox ps [--no-refresh]       # list capsules; reconciles against AWS by default, --no-refresh reads cache only
 ```
 
 - `build` uses `./capsule` when run from a clone, the embedded capsule otherwise, or

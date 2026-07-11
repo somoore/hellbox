@@ -137,6 +137,7 @@ async fn open_fork_b(args: OpenForkBArgs<'_>) -> Result<()> {
         upstream: upstream.clone(),
         control_secret,
         entry_token_used: std::sync::atomic::AtomicBool::new(false),
+        entry_token_deadline: std::time::Instant::now() + proxy::ENTRY_TOKEN_TTL,
     });
     let base = ProxyConfig {
         upstream,

@@ -52,11 +52,12 @@ flowchart LR
   every later request rides the cookie instead. A different local user can open
   `127.0.0.1:6080` but does not know the 128-bit secret, so their requests never establish a
   session. This is the portable stand-in for `SO_PEERCRED`, which only works on Unix-domain
-  sockets, not the TCP loopback a browser needs. The token is single-use: the proxy consumes
-  it on the first successful navigation, so a replayed URL is worthless. The injected page
-  also ships `Referrer-Policy: no-referrer` and scrubs `hbk` from the address bar with
+  sockets, not the TCP loopback a browser needs. The token is single-use and short-lived: the
+  proxy consumes it on the first successful navigation and expires it seconds after startup
+  regardless, so a replayed or stale URL is worthless. The injected page also ships
+  `Referrer-Policy: no-referrer` and scrubs `hbk` from the address bar with
   `history.replaceState`, and the token is never written to logs or stdout. See
-  `has_entry_token`, `consume_once`, and `allowed_initial_navigation` in
+  `has_entry_token`, `consume_once`, `ENTRY_TOKEN_TTL`, and `allowed_initial_navigation` in
   `rs-cli/src/proxy.rs` and their tests.
 - **Fetch-metadata navigation gate.** The data-plane paths accept top-level document
   navigations (omnibox or a link click) but refuse embedding (`Sec-Fetch-Dest:
@@ -95,12 +96,23 @@ The parts I deliberately left out of scope:
 - **A different local user on a shared host** is the case worth calling out, because it is
   *not* already game over. Another user can open `127.0.0.1:6080` (loopback is not
   per-user), but they cannot read your browser's cookie or your process memory. Before the
-  entry token, they could shape a navigation-looking request and drive the data plane input
-  channel into your game. The single-use entry token closes that: the first navigation
-  requires a 128-bit secret only your browser was handed, and it is consumed on use, so a
-  foreign user's tokenless (or replayed) request is refused before it ever obtains the
-  session cookie. Hellbox still assumes a single-user machine; this just means a shared host
-  is not an open door.
+  entry token, they could shape a navigation-looking request and drive the data-plane input
+  channel into your game. The single-use, short-lived entry token narrows that to a race at
+  the launch instant: only the first navigation to present the token establishes the session,
+  it is consumed on use, and it expires seconds after the proxy starts whether used or not.
+  Two honest caveats. First, the token both bootstraps the session *and* unlocks control (one
+  session cookie gates the game stream and the suspend/resume/state endpoints alike), so a
+  race that beats your browser is not mere input griefing, it is a control-capable session for
+  the one MicroVM you own. This is inherent to a browser talking to a TCP loopback port, which
+  cannot bind a session to the peer's identity the way a Unix socket could; splitting control
+  onto a Unix socket would close it but would also remove the in-page suspend/resume, so this
+  demo keeps the buttons and accepts the residual. Second, single-use makes that race *loud,
+  not impossible*: whoever wins gets the token, and if the attacker wins your own browser gets
+  a spent token and the launch visibly fails, so a win cannot happen silently. The exposure
+  exists only while the proxy is running and only on a shared host, and it evaporates the
+  moment you are playing (token spent) or you quit (the listener and the in-memory secret are
+  gone). Hellbox assumes a single-user machine; on that machine there is no second user to
+  race and the case does not arise.
 - **Cookie fixation is structurally impossible, not merely blocked.** The proxy *mints* the
   session secret server-side and the client never chooses it, so there is no attacker-set
   value to fixate. `SameSite=Strict` and `HttpOnly` stop a cross-origin set, the cookie's

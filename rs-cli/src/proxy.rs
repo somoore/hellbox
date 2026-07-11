@@ -28,6 +28,10 @@ use crate::state::State;
 
 const AUTH_TOKEN_KEY: &str = "X-aws-proxy-auth";
 const TOKEN_TTL_MINUTES: i32 = 30;
+/// How long the single-use entry token stays valid after the proxy starts. The
+/// real browser navigates within a second; a generous 120s covers a slow opener
+/// or a click-to-launch delay while still closing the window promptly.
+pub const ENTRY_TOKEN_TTL: std::time::Duration = std::time::Duration::from_secs(120);
 const CONTROL_COOKIE_NAME: &str = "hellbox_control";
 const CONTROL_COOKIE_PREFIX: &str = "hellbox_control=";
 
@@ -94,6 +98,10 @@ pub struct ProxyControl {
     /// navigation makes a lifted token worthless: a racing foreign uid either
     /// loses (already burned) or wins and the real browser's nav fails loudly.
     pub entry_token_used: AtomicBool,
+    /// The entry token also expires: after this instant it is refused even if
+    /// unused. The real browser navigates within a second of launch, so a tight
+    /// TTL costs nothing and shrinks the window a co-resident user has to race.
+    pub entry_token_deadline: std::time::Instant,
 }
 
 /// Proxy routing and control config.
@@ -640,6 +648,9 @@ fn has_entry_token<B>(req: &Request<B>, secret: &str) -> bool {
 }
 
 fn allowed_initial_navigation(req: &Request<Incoming>, ctrl: &ProxyControl) -> bool {
+    if std::time::Instant::now() > ctrl.entry_token_deadline {
+        return false;
+    }
     if !(req.method() == hyper::Method::GET
         && req.uri().path() == "/"
         && is_top_level_navigation(req.headers())

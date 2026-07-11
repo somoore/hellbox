@@ -1,6 +1,6 @@
 [package]
 name = "hellbox"
-version = "1.0.13"
+version = "1.0.14"
 edition = "2024"
 description = "Run native DOOM inside an AWS Lambda MicroVM, streamed to a browser tab"
 license = "Apache-2.0"

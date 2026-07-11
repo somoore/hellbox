@@ -162,13 +162,19 @@ async fn open_fork_b(args: OpenForkBArgs<'_>) -> Result<()> {
             .await?
         }
     };
-    let url = if h264 {
-        format!("{base_url}/?display=h264")
-    } else {
-        base_url.clone()
-    };
+    // The opened URL carries the per-session secret as a one-time entry token.
+    // The first top-level navigation presents it, the proxy validates it and
+    // sets the HttpOnly cookie, and every request after rides the cookie. A
+    // different local user can open 127.0.0.1:PORT but cannot know this token
+    // (128-bit CSPRNG), so their forged-loopback-Host requests are rejected:
+    // this closes cross-user data-plane injection on a shared host. (A same-uid
+    // process can read the token from argv/config, but it already owns your
+    // shell and credentials, so the proxy was never its boundary.)
+    let sep = if h264 { "&" } else { "?" };
+    let display = if h264 { "?display=h264" } else { "" };
+    let url = format!("{base_url}/{display}{sep}hbk={control_secret_copy}");
 
-    tracing::debug!(target: "hellbox::open", "proxy serving {url} (auth header injected; JWE <redacted>)");
+    tracing::debug!(target: "hellbox::open", "proxy serving loopback stream (entry token + cookie gated; JWE <redacted>)");
 
     // Prove the whole chain before handing the user a URL: proxy answering on
     // loopback, and each stream channel handshaking through it into the VM.
@@ -266,12 +272,15 @@ async fn verify_end_to_end(base_url: &str, control_secret: &str) -> Vec<String> 
 
     let mut failures = Vec::new();
 
+    // The page check must carry the entry token, same as the browser's first
+    // navigation, now that the data plane rejects tokenless/cookieless requests.
+    let page_url = format!("{base_url}/?hbk={control_secret}");
     let mut page_ok = false;
     for attempt in 0..5u32 {
         if attempt > 0 {
             tokio::time::sleep(Duration::from_secs(1u64 << attempt.min(3))).await;
         }
-        if let Ok(resp) = reqwest::get(base_url).await
+        if let Ok(resp) = reqwest::get(&page_url).await
             && resp.status().is_success()
         {
             page_ok = true;

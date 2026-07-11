@@ -607,10 +607,41 @@ fn has_local_session(headers: &HeaderMap, secret: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn allowed_initial_navigation(req: &Request<Incoming>) -> bool {
+/// A first navigation is allowed only when it carries the per-session entry
+/// token (`?hbk=<secret>`) that the opened URL contains. This is what a
+/// different local user cannot forge: they can reach 127.0.0.1:PORT but do not
+/// know the 128-bit secret, so their requests never establish a session.
+fn has_entry_token<B>(req: &Request<B>, secret: &str) -> bool {
+    // The token is a fixed hex secret (no percent-encoding needed), so a plain
+    // key=value scan over the query string is enough and avoids a new dep.
+    req.uri()
+        .query()
+        .map(|q| {
+            q.split('&').any(|pair| {
+                pair.split_once('=')
+                    .is_some_and(|(k, v)| k == "hbk" && subtle_eq(v.as_bytes(), secret.as_bytes()))
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn allowed_initial_navigation(req: &Request<Incoming>, secret: &str) -> bool {
     req.method() == hyper::Method::GET
         && req.uri().path() == "/"
         && is_top_level_navigation(req.headers())
+        && has_entry_token(req, secret)
+}
+
+/// Constant-time comparison so a token check can't be timed.
+fn subtle_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 fn is_top_level_navigation(headers: &HeaderMap) -> bool {
@@ -624,11 +655,12 @@ fn is_top_level_navigation(headers: &HeaderMap) -> bool {
             mode.eq_ignore_ascii_case("navigate")
                 && header("sec-fetch-dest").is_none_or(|d| d.eq_ignore_ascii_case("document"))
         }
-        // No fetch metadata (curl, older browsers): keep the site heuristic.
-        None => matches!(
-            header("sec-fetch-site"),
-            Some("same-origin" | "none") | None
-        ),
+        // No sec-fetch-mode: only trust an explicit same-origin/none site
+        // signal. A request with NO fetch metadata at all fails closed here.
+        // The entry token (checked separately) is what actually authorizes the
+        // first navigation now, so we don't need to guess for metadata-less
+        // clients.
+        None => matches!(header("sec-fetch-site"), Some("same-origin" | "none")),
     }
 }
 
@@ -668,7 +700,13 @@ fn data_plane_rejection(
             r#"{"error":"data-plane proxy is loopback-only"}"#.to_string(),
         ));
     }
-    if allowed_initial_navigation(req) || has_local_session(req.headers(), &ctrl.control_secret) {
+    // Either an already-established session (cookie) OR a first navigation that
+    // presents the entry token. The old code allowed ANY top-level navigation
+    // with no secret, which let a different local user shape a nav-looking
+    // request and drive the data plane. Requiring the token closes that.
+    if has_local_session(req.headers(), &ctrl.control_secret)
+        || allowed_initial_navigation(req, &ctrl.control_secret)
+    {
         return None;
     }
     Some(json_response(
@@ -1239,13 +1277,39 @@ mod tests {
             ("sec-fetch-dest", "image"),
             ("sec-fetch-site", "cross-site"),
         ])));
-        // No fetch metadata (curl, older browsers): site heuristic applies.
-        assert!(is_top_level_navigation(&hm(&[])));
+        // No fetch metadata at all now fails closed: the entry token
+        // authorizes the first navigation, so we don't guess for a request
+        // that carries no site signal whatsoever.
+        assert!(!is_top_level_navigation(&hm(&[])));
+        // An explicit same-origin/none site signal still passes.
         assert!(is_top_level_navigation(&hm(&[("sec-fetch-site", "none")])));
         assert!(!is_top_level_navigation(&hm(&[(
             "sec-fetch-site",
             "cross-site"
         )])));
+    }
+
+    #[test]
+    fn entry_token_gate() {
+        // Not a real secret: a repeated, low-entropy stand-in that still
+        // exercises the length-checked compare.
+        let secret = "tokentokentokentoken";
+        let req = |uri: &str| {
+            Request::builder()
+                .uri(uri)
+                .body(Full::<Bytes>::new(Bytes::new()))
+                .unwrap()
+        };
+        // Matching token in any position passes; wrong or absent fails.
+        assert!(has_entry_token(&req(&format!("/?hbk={secret}")), secret));
+        assert!(has_entry_token(
+            &req(&format!("/?display=h264&hbk={secret}")),
+            secret
+        ));
+        assert!(!has_entry_token(&req("/?hbk=wrong"), secret));
+        assert!(!has_entry_token(&req("/"), secret));
+        // A prefix of the secret must not match (length-checked compare).
+        assert!(!has_entry_token(&req("/?hbk=token"), secret));
     }
 
     #[test]

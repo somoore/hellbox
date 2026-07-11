@@ -46,11 +46,20 @@ flowchart LR
   `resume`. A cross-origin, DNS-rebound, or blind local request gets a 403. See
   `is_loopback_authority` and `cookie_has_control_secret` in `rs-cli/src/proxy.rs` and their
   tests.
+- **Per-session entry token on the data plane.** The URL `hellbox` opens carries a
+  one-time entry token (`?hbk=<per-session secret>`). The first navigation is only accepted
+  if it presents that token; the served page then sets the HttpOnly `hellbox_control` cookie
+  and every later request rides the cookie instead. A different local user can open
+  `127.0.0.1:6080` but does not know the 128-bit secret, so their requests never establish a
+  session. This is the portable stand-in for `SO_PEERCRED`, which only works on Unix-domain
+  sockets, not the TCP loopback a browser needs. See `has_entry_token` and
+  `allowed_initial_navigation` in `rs-cli/src/proxy.rs` and their tests.
 - **Fetch-metadata navigation gate.** The data-plane paths accept top-level document
-  navigations (any initiator, omnibox or a link click) but refuse embedding
-  (`Sec-Fetch-Dest: iframe`/`object`, which would gain cookie-bearing same-origin
-  WebSocket access) and scripted cross-site subresource loads. See
-  `is_top_level_navigation` in `rs-cli/src/proxy.rs`.
+  navigations (omnibox or a link click) but refuse embedding (`Sec-Fetch-Dest:
+  iframe`/`object`, which would gain cookie-bearing same-origin WebSocket access) and
+  scripted cross-site subresource loads. A request carrying no fetch metadata at all now
+  fails closed rather than being trusted on a site heuristic, since the entry token is what
+  authorizes the first navigation. See `is_top_level_navigation` in `rs-cli/src/proxy.rs`.
 - **Launch Stack template bucket.** The template bucket serves `doom.yaml` only to
   requests made *via CloudFormation* (`aws:CalledVia` condition, TLS required). Anonymous
   internet reads get 403, while the console's Launch Stack flow works from any account.
@@ -70,12 +79,23 @@ flowchart LR
 
 The parts I deliberately left out of scope:
 
-- **A local process running as you** can reach `127.0.0.1:6080` directly, since it is not
-  bound by same-origin policy. The per-session `hellbox_control` cookie blocks blind calls to
-  the control endpoints, but a same-user process that can scrape the browser session or proxy
-  traffic is still out of scope: a process running as you already owns your shell and
-  credentials. Those endpoints only suspend, resume, or read state for the one MicroVM you own,
-  so the worst case is freezing or thawing your own game.
+- **A process running as your own user** is out of scope, and honestly so. It can reach
+  `127.0.0.1:6080`, and it can also lift the `hellbox_control` cookie straight out of the
+  browser's memory or read the entry token off the proxy, so the cookie and token do not
+  stop it. That is fine: a process running as you already owns your shell, your browser, and
+  your AWS credentials, so the proxy is not the interesting target. And even if it drives the
+  control endpoints, they only suspend, resume, or read state for the one MicroVM you own, so
+  the worst case is freezing or thawing your own game. The point is not that it *can't reach*
+  the control plane; it can. The point is that it *doesn't matter* once something is already
+  running as you.
+- **A different local user on a shared host** is the case worth calling out, because it is
+  *not* already game over. Another user can open `127.0.0.1:6080` (loopback is not
+  per-user), but they cannot read your browser's cookie or your process memory. Before the
+  entry token, they could shape a navigation-looking request and drive the data plane input
+  channel into your game. The per-session entry token closes that: the first navigation
+  requires a 128-bit secret only your browser was handed, so a foreign user's tokenless
+  request is refused before it ever obtains the session cookie. Hellbox still assumes a
+  single-user machine; this just means a shared host is not an open door.
 - **Your AWS credentials live on your machine** (via Granted, SSO, or environment variables),
   as with any AWS CLI or SDK use. They are never committed, and `.gitignore` excludes `.env`,
   `*.pem`, `*.key`, `aws-credentials*`, and `~/.hellbox/`. The binary reads credentials
@@ -101,8 +121,10 @@ The parts I deliberately left out of scope:
   non-empty `egress_connector_arn` into `RunMicrovm` (see `up.rs`; leave it empty for the
   managed default). The runtime MicroVM needs no outbound, so a deny-all egress connector is
   safe.
-- **Not multi-tenant, not production.** No auth between browser and proxy beyond loopback
-  binding, no rate limiting, no audit logging. Do not expose the proxy port off your machine.
+- **Not multi-tenant, not production.** The browser-to-proxy auth is a per-session cookie
+  plus entry token over loopback, which is enough to fend off other origins and a different
+  local user, not a real authentication system. No rate limiting, no audit logging. Do not
+  expose the proxy port off your machine.
 
 ## Reporting
 

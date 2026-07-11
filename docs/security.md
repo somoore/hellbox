@@ -46,14 +46,18 @@ flowchart LR
   `resume`. A cross-origin, DNS-rebound, or blind local request gets a 403. See
   `is_loopback_authority` and `cookie_has_control_secret` in `rs-cli/src/proxy.rs` and their
   tests.
-- **Per-session entry token on the data plane.** The URL `hellbox` opens carries a
-  one-time entry token (`?hbk=<per-session secret>`). The first navigation is only accepted
-  if it presents that token; the served page then sets the HttpOnly `hellbox_control` cookie
-  and every later request rides the cookie instead. A different local user can open
+- **Single-use per-session entry token on the data plane.** The URL `hellbox` opens carries
+  an entry token (`?hbk=<per-session secret>`). The first navigation is only accepted if it
+  presents that token; the served page then sets the HttpOnly `hellbox_control` cookie and
+  every later request rides the cookie instead. A different local user can open
   `127.0.0.1:6080` but does not know the 128-bit secret, so their requests never establish a
   session. This is the portable stand-in for `SO_PEERCRED`, which only works on Unix-domain
-  sockets, not the TCP loopback a browser needs. See `has_entry_token` and
-  `allowed_initial_navigation` in `rs-cli/src/proxy.rs` and their tests.
+  sockets, not the TCP loopback a browser needs. The token is single-use: the proxy consumes
+  it on the first successful navigation, so a replayed URL is worthless. The injected page
+  also ships `Referrer-Policy: no-referrer` and scrubs `hbk` from the address bar with
+  `history.replaceState`, and the token is never written to logs or stdout. See
+  `has_entry_token`, `consume_once`, and `allowed_initial_navigation` in
+  `rs-cli/src/proxy.rs` and their tests.
 - **Fetch-metadata navigation gate.** The data-plane paths accept top-level document
   navigations (omnibox or a link click) but refuse embedding (`Sec-Fetch-Dest:
   iframe`/`object`, which would gain cookie-bearing same-origin WebSocket access) and
@@ -92,10 +96,18 @@ The parts I deliberately left out of scope:
   *not* already game over. Another user can open `127.0.0.1:6080` (loopback is not
   per-user), but they cannot read your browser's cookie or your process memory. Before the
   entry token, they could shape a navigation-looking request and drive the data plane input
-  channel into your game. The per-session entry token closes that: the first navigation
-  requires a 128-bit secret only your browser was handed, so a foreign user's tokenless
-  request is refused before it ever obtains the session cookie. Hellbox still assumes a
-  single-user machine; this just means a shared host is not an open door.
+  channel into your game. The single-use entry token closes that: the first navigation
+  requires a 128-bit secret only your browser was handed, and it is consumed on use, so a
+  foreign user's tokenless (or replayed) request is refused before it ever obtains the
+  session cookie. Hellbox still assumes a single-user machine; this just means a shared host
+  is not an open door.
+- **Cookie fixation is structurally impossible, not merely blocked.** The proxy *mints* the
+  session secret server-side and the client never chooses it, so there is no attacker-set
+  value to fixate. `SameSite=Strict` and `HttpOnly` stop a cross-origin set, the cookie's
+  IP-host scope (no parent domain) stops cookie-tossing from a sibling name, a different uid
+  can't write your cookie jar, and forging a request with a valid cookie needs the secret an
+  attacker can't guess. The only route to a cookie the proxy will accept is reading the real
+  one, which is the same-uid case already scoped out above.
 - **Your AWS credentials live on your machine** (via Granted, SSO, or environment variables),
   as with any AWS CLI or SDK use. They are never committed, and `.gitignore` excludes `.env`,
   `*.pem`, `*.key`, `aws-credentials*`, and `~/.hellbox/`. The binary reads credentials

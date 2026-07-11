@@ -136,6 +136,7 @@ async fn open_fork_b(args: OpenForkBArgs<'_>) -> Result<()> {
         token_ports: vec![port, audio_port, video_port, input_port],
         upstream: upstream.clone(),
         control_secret,
+        entry_token_used: std::sync::atomic::AtomicBool::new(false),
     });
     let base = ProxyConfig {
         upstream,
@@ -173,6 +174,9 @@ async fn open_fork_b(args: OpenForkBArgs<'_>) -> Result<()> {
     let sep = if h264 { "&" } else { "?" };
     let display = if h264 { "?display=h264" } else { "" };
     let url = format!("{base_url}/{display}{sep}hbk={control_secret_copy}");
+    // Token-free URL for anything a human or a log sees. The real `url` (with
+    // hbk) only ever goes to the browser opener, never to stdout or tracing.
+    let display_url = format!("{base_url}/{display}");
 
     tracing::debug!(target: "hellbox::open", "proxy serving loopback stream (entry token + cookie gated; JWE <redacted>)");
 
@@ -196,10 +200,15 @@ async fn open_fork_b(args: OpenForkBArgs<'_>) -> Result<()> {
     }
 
     if no_open {
-        println!("==> proxy ready at {url}  (--no-open: browser not launched)");
+        // The user drives navigation themselves here, so they need the token in
+        // the URL. It prints to their own terminal only, and single-use +
+        // no-referrer bound the exposure. The default (auto-open) path never
+        // prints it.
+        println!("==> proxy ready at {url}");
+        println!("    (--no-open: open that URL yourself; the hbk token is single-use)");
     } else {
         browser::open(&url)?;
-        println!("==> DOOM is open at {url}");
+        println!("==> DOOM is open at {display_url}");
     }
 
     if idle_minutes > 0 {
@@ -272,15 +281,20 @@ async fn verify_end_to_end(base_url: &str, control_secret: &str) -> Vec<String> 
 
     let mut failures = Vec::new();
 
-    // The page check must carry the entry token, same as the browser's first
-    // navigation, now that the data plane rejects tokenless/cookieless requests.
-    let page_url = format!("{base_url}/?hbk={control_secret}");
+    // The page check authenticates with the session cookie, NOT the entry
+    // token: the token is single-use and must be left intact for the real
+    // browser's first navigation. Burning it here would 404 the actual user.
+    let client = reqwest::Client::new();
     let mut page_ok = false;
     for attempt in 0..5u32 {
         if attempt > 0 {
             tokio::time::sleep(Duration::from_secs(1u64 << attempt.min(3))).await;
         }
-        if let Ok(resp) = reqwest::get(&page_url).await
+        if let Ok(resp) = client
+            .get(base_url)
+            .header("cookie", format!("hellbox_control={control_secret}"))
+            .send()
+            .await
             && resp.status().is_success()
         {
             page_ok = true;

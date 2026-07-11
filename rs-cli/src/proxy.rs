@@ -3,7 +3,7 @@
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::RwLock;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use anyhow::{Context, Result};
 use aws_sdk_lambdamicrovms::Client as MicrovmClient;
@@ -88,6 +88,12 @@ pub struct ProxyControl {
     pub token_ports: Vec<i32>,
     pub upstream: Upstream,
     pub control_secret: String,
+    /// The entry token is single-use: the opener passes it in argv (xdg-open /
+    /// open take the URL as an argument, so this is unavoidable), which is
+    /// world-readable via /proc on Linux. Consuming it on the first successful
+    /// navigation makes a lifted token worthless: a racing foreign uid either
+    /// loses (already burned) or wins and the real browser's nav fails loudly.
+    pub entry_token_used: AtomicBool,
 }
 
 /// Proxy routing and control config.
@@ -329,6 +335,14 @@ async fn handle_http(
         out.insert(
             hyper::header::CACHE_CONTROL,
             HeaderValue::from_static("no-store"),
+        );
+        // The entry token rides in the URL, so keep it from leaking back out
+        // through the Referer of any subresource fetched from first paint.
+        // (history.replaceState in the page scrubs the address bar too, but a
+        // response header covers subresources before script runs.)
+        out.insert(
+            HeaderName::from_static("referrer-policy"),
+            HeaderValue::from_static("no-referrer"),
         );
         if let Some(ctrl) = &cfg.control {
             let cookie = format!(
@@ -625,11 +639,23 @@ fn has_entry_token<B>(req: &Request<B>, secret: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn allowed_initial_navigation(req: &Request<Incoming>, secret: &str) -> bool {
-    req.method() == hyper::Method::GET
+fn allowed_initial_navigation(req: &Request<Incoming>, ctrl: &ProxyControl) -> bool {
+    if !(req.method() == hyper::Method::GET
         && req.uri().path() == "/"
         && is_top_level_navigation(req.headers())
-        && has_entry_token(req, secret)
+        && has_entry_token(req, &ctrl.control_secret))
+    {
+        return false;
+    }
+    consume_once(&ctrl.entry_token_used)
+}
+
+/// Flip a set-once flag, returning true only for the first caller. This is what
+/// makes the entry token single-use: a replayed URL (or one lifted from argv
+/// after the real browser already navigated) finds it spent and is rejected.
+fn consume_once(used: &AtomicBool) -> bool {
+    used.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
 }
 
 /// Constant-time comparison so a token check can't be timed.
@@ -705,7 +731,7 @@ fn data_plane_rejection(
     // with no secret, which let a different local user shape a nav-looking
     // request and drive the data plane. Requiring the token closes that.
     if has_local_session(req.headers(), &ctrl.control_secret)
-        || allowed_initial_navigation(req, &ctrl.control_secret)
+        || allowed_initial_navigation(req, ctrl)
     {
         return None;
     }
@@ -1087,6 +1113,12 @@ const CONTROL_PANEL: &str = r##"
 </div>
 <script>
 (function(){
+  // Scrub the entry token out of the address bar, history, and the a11y/
+  // shoulder-surf surface. The cookie is set by now, so the token is spent.
+  try{if(location.search.indexOf('hbk=')!==-1){
+    var q=location.search.replace(/[?&]hbk=[^&]*/,'').replace(/^&/,'?');
+    history.replaceState(null,'',location.pathname+q+location.hash);
+  }}catch(e){}
   var dot=document.getElementById('hellbox-dot');
   var st=document.getElementById('hellbox-status');
   var btn=document.getElementById('hellbox-btn');
@@ -1310,6 +1342,15 @@ mod tests {
         assert!(!has_entry_token(&req("/"), secret));
         // A prefix of the secret must not match (length-checked compare).
         assert!(!has_entry_token(&req("/?hbk=token"), secret));
+    }
+
+    #[test]
+    fn entry_token_is_single_use() {
+        let used = AtomicBool::new(false);
+        // First navigation wins; every replay after is rejected.
+        assert!(consume_once(&used));
+        assert!(!consume_once(&used));
+        assert!(!consume_once(&used));
     }
 
     #[test]

@@ -53,6 +53,33 @@ pub async fn preflight_identity(sdk: &aws_config::SdkConfig) -> Result<Identity>
         }),
         Err(e) => {
             tracing::debug!(target: "hellbox::aws", "sts get-caller-identity failed: {e:?}");
+            // A profile carrying a `login_session` key (written by Granted / Common Fate,
+            // or a newer AWS CLI login) trips the SDK's ProfileFile provider: this build
+            // has `credentials-login` off, so the provider fails to build on that key
+            // rather than falling through to the profile's `credential_process`. Enabling
+            // the feature doesn't help either — it then resolves through a native
+            // login-session cache that Granted never populates. The AWS CLI tolerates the
+            // key, so users hit a case where `aws` works but hellbox doesn't; the generic
+            // "check your creds" text would send them in circles. Detect it and point at
+            // the workarounds that actually resolve it.
+            if format!("{e:?}").contains("credentials-login") {
+                anyhow::bail!(
+                    "AWS credentials could not be resolved from your profile.\n\
+                     The profile carries a `login_session` key (Granted / Common Fate, or a \
+                     newer AWS CLI login). The AWS CLI tolerates it, but hellbox's AWS SDK \
+                     resolves it through a native login-session cache that Granted does not \
+                     populate, so it fails here even though `aws sts get-caller-identity` \
+                     works with the same profile.\n\
+                     Two ways forward:\n  \
+                     - Export env-var credentials (works now, any shell):\n      \
+                       run `aws configure export-credentials --profile <name> --format env`, \
+                       set those variables, and clear AWS_PROFILE before running hellbox.\n  \
+                     - Or remove the `login_session` line from the profile in ~/.aws/config \
+                       so hellbox uses its `credential_process` (e.g. `granted \
+                       credential-process`), which this build resolves fine.\n\
+                     Details: docs/cli.md (Troubleshooting)."
+                );
+            }
             anyhow::bail!(
                 "no working AWS credentials found.\n\
                  hellbox reads credentials the same way the AWS CLI does: environment \

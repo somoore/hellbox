@@ -108,7 +108,8 @@ hellbox reads AWS credentials exactly the way the AWS CLI v2 does, through the S
 default provider chain: environment variables, `~/.aws/credentials` and `~/.aws/config`
 profiles (`AWS_PROFILE` respected), IAM Identity Center / SSO login sessions, and
 `credential_process` helpers like Granted's `assume`. If `aws sts get-caller-identity`
-works in your shell, hellbox works.
+works in your shell, hellbox almost always works too — the one known exception is a
+profile that carries a `login_session` key (see Troubleshooting).
 
 Commands that touch AWS start with an identity check. If credentials are missing or
 expired you get a plain explanation and the usual fixes (`aws sso login`, `assume`,
@@ -177,6 +178,17 @@ ephemeral port and prints the URL it actually bound.
 
 **`could not mint auth token (capsule may be suspended)`**. Informational. `open` starts a
 control-only page, Resume works from there, and the token gets re-minted on resume.
+
+**`credentials-login` / `login_session` profile error**. If a command fails with a
+credential error mentioning `credentials-login`, your profile carries a `login_session`
+key (Granted / Common Fate, or a newer AWS CLI login). The AWS CLI tolerates that key, but
+hellbox's AWS SDK resolves it through a native login-session cache that Granted never
+writes, so the profile fails here even though `aws sts get-caller-identity` works with it.
+Two fixes: (1) export env-var credentials —
+`aws configure export-credentials --profile <name> --format env` — set them, and clear
+`AWS_PROFILE` before running hellbox; or (2) remove the `login_session` line from the
+profile in `~/.aws/config` so hellbox uses its `credential_process` (e.g. `granted
+credential-process`), which resolves fine.
 
 **Verbose logs**. `RUST_LOG=hellbox=debug hellbox <cmd>`. The proxy logs upstream
 connection failures at `warn` and per-channel verification attempts at `debug`.

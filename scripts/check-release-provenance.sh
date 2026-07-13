@@ -40,6 +40,11 @@ require_pattern "deploy.sh" "source_ref=\"refs/tags/\\\$rel\"" \
 require_pattern "deploy.sh" "--source-ref \"\\\$source_ref\"" \
   "deploy attestation verification must bind to the expected source ref"
 
+require_pattern "install.ps1" "--source-ref \"refs/tags/\\\$releaseTag\"" \
+  "Windows install attestation must bind to the expected tag source ref"
+require_pattern "install.ps1" "--signer-workflow \"github.com/\\\$Repo/" \
+  "Windows install attestation must pin the release signer workflow"
+
 if [ "$fail" = 0 ]; then
   echo "check-release-provenance: OK - release attestations are bound to tag source refs"
 else

@@ -46,9 +46,10 @@ aws-sdk-cloudformation = { version = "1", default-features = false, features = [
 aws-sdk-sts = { version = "1", default-features = false, features = [
     "default-https-client", "rt-tokio",
 ] }
-# Inject static creds when we resolve a login_session profile via its own
-# credential_process (see aws.rs). Already in the tree via aws-config.
+# Refreshable credential provider for the login_session credential_process
+# fallback (see aws.rs). Both already in the tree via aws-config.
 aws-credential-types = "1"
+time = { version = "0.3", features = ["parsing"] }  # parse credential_process Expiration
 
 # build artifact
 zip = "8.6"

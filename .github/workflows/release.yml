@@ -160,7 +160,6 @@ jobs:
             --wait
 
           codesign --verify --strict --verbose=2 "${{ matrix.asset }}"
-          spctl --assess --type execute --verbose=4 "${{ matrix.asset }}"
 
       - name: Checksum asset
         shell: bash

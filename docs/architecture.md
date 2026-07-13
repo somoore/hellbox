@@ -302,6 +302,8 @@ Full threat model in [security.md](security.md).
 Hellbox/
 ├── deploy.sh               # one-command front door: deploy, fetch binary, build/up/open
 ├── uninstall.sh            # remove everything (MicroVM, image, stack, binary, local state)
+├── install.ps1             # Windows: fetch + verify the binary, add it to PATH
+├── uninstall.ps1           # Windows parallel to uninstall.sh
 ├── deploy/doom.yaml        # CloudFormation: S3 bucket + IAM build/exec roles (Launch Stack)
 ├── capsule/                # the MicroVM image
 │   ├── Dockerfile          #   installs the hash-pinned prebuilt SDL2 + Chocolate Doom, verifies WAD SHA256

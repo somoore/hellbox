@@ -131,4 +131,18 @@ touch "$parent_root/keep"
 expect_failure "repo-parent" "$child_repo/uninstall.sh" "$test_home" "HELLBOX_HOME=$parent_root"
 [ -e "$parent_root/keep" ] || fail "repository parent contents were deleted"
 
+# Static guard for the Windows port. This bash harness can't exercise
+# uninstall.ps1, so assert its local-state deletion guards are still present, so
+# a future edit can't silently drop them (parity with uninstall.sh above).
+ps1="$(pwd)/uninstall.ps1"
+require_ps1(){
+  grep -qE -- "$2" "$ps1" || fail "uninstall.ps1 missing guard: $1"
+}
+require_ps1 "symlink/junction refusal"          'ReparsePoint'
+require_ps1 "home-directory refusal"            'is your home directory'
+require_ps1 "home-parent refusal"               'is a parent of your home directory'
+require_ps1 "repo-root refusal"                 'is the repository root'
+require_ps1 "config marker (artifact_bucket)"   'artifact_bucket'
+require_ps1 "config marker (execution_role_arn)" 'execution_role_arn'
+
 echo "check-uninstall-safety: OK - uninstall local-state deletion is guarded"

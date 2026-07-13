@@ -81,66 +81,91 @@ Info "hellbox $tag  (windows-$arch)"
 # GitHub build-provenance attestation, bound to the release workflow identity
 # and the tag's source ref. To trust nothing prebuilt, build from source
 # (cd rs-cli; make release) instead of running this script.
-function Confirm-Attestation($file, $releaseTag) {
+# Both verifiers return $true/$false rather than exiting, so a bad *cache* can
+# fall through to a fresh download while a bad *download* is a hard Die at the
+# call site. Neither one runs the binary - the cache is trusted only after these
+# pass, so `install.ps1` never executes an unverified exe (e.g. one left by a
+# manual install or a tampered cache).
+function Test-Attestation($file, $releaseTag) {
   if ($SkipAtt) {
     if ($Version -eq 'latest') {
       Die 'HELLBOX_SKIP_ATTESTATION=1 requires a pinned HELLBOX_VERSION, not latest'
     }
     Warn "skipping GitHub artifact attestation verification for pinned release $Version"
-    return
+    return $true
   }
   if (-not (Have gh)) {
     Die ("gh (GitHub CLI) is required to verify the build attestation for $asset.`n" +
          "  Install it with 'winget install GitHub.cli', build from source, or set`n" +
          "  HELLBOX_SKIP_ATTESTATION=1 with a pinned HELLBOX_VERSION to bypass.")
   }
+  # --source-ref binds the check to this exact tag, so an older artifact from the
+  # same workflow (or a swapped asset+sidecar) fails rather than passing.
   gh attestation verify $file --repo $Repo `
     --signer-workflow "github.com/$Repo/.github/workflows/release.yml" `
     --source-ref "refs/tags/$releaseTag" 2>$null
-  if ($LASTEXITCODE -ne 0) {
-    Die "GitHub build-provenance attestation verification failed for $asset"
-  }
+  return ($LASTEXITCODE -eq 0)
 }
 
-function Confirm-Sha256($file, $sumFile) {
+function Test-Sha256($file, $sumFile) {
   $expected = ((Get-Content $sumFile -Raw).Trim() -split '\s+')[0]
   if (-not $expected) { Die "empty checksum file: $sumFile" }
   $actual = (Get-FileHash $file -Algorithm SHA256).Hash
-  if ($actual -ne $expected.ToUpper()) {
-    Die "SHA256 mismatch for $(Split-Path $file -Leaf):`n  expected $expected`n  got      $actual"
-  }
+  return ($actual -eq $expected.ToUpper())
 }
 
-function Get-BinVersion($exePath) {
-  try { (& $exePath --version 2>$null).Split()[1] } catch { $null }
+# Download a release asset. Falls back to `gh release download` when the public
+# URL fails, so a private HELLBOX_REPO (whose tag Resolve-Tag already found via
+# gh) still installs - matching deploy.sh's authenticated-download fallback.
+function Get-ReleaseAsset($assetName, $outFile) {
+  $url = "https://github.com/$Repo/releases/download/$tag/$assetName"
+  try {
+    Invoke-WebRequest $url -OutFile $outFile
+    return
+  } catch {
+    if (Have gh) {
+      Info "public download failed for $assetName - fetching via gh (private repo?)"
+      gh release download $tag --repo $Repo --pattern $assetName --output $outFile --clobber 2>$null
+      if ($LASTEXITCODE -eq 0 -and (Test-Path $outFile)) { return }
+    }
+    Die "could not download $assetName from $Repo ($tag): $($_.Exception.Message)"
+  }
 }
 
 # --- Download + verify (or re-verify an already-cached match) ---------------
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
-$exe    = Join-Path $BinDir 'hellbox.exe'
-$sum    = Join-Path $BinDir 'hellbox.exe.sha256'
-$wanted = $tag.TrimStart('v')
+$exe = Join-Path $BinDir 'hellbox.exe'
+$sum = Join-Path $BinDir 'hellbox.exe.sha256'
 
 $needDownload = $true
-if ((Test-Path $exe) -and (Test-Path $sum) -and ((Get-BinVersion $exe) -eq $wanted)) {
-  # Cache hit: still re-verify so a tampered cache can't be silently trusted.
-  Confirm-Sha256 $exe $sum
-  Confirm-Attestation $exe $tag
-  Info "hellbox $tag already installed and verified at $exe"
-  $needDownload = $false
+if ((Test-Path $exe) -and (Test-Path $sum)) {
+  # Re-verify the cache BEFORE trusting or running it. Attestation is bound to
+  # $tag, so a pass also proves the cache is *this* release: an older or tampered
+  # cache fails here and falls through to a fresh, verified download.
+  if ((Test-Sha256 $exe $sum) -and (Test-Attestation $exe $tag)) {
+    Info "hellbox $tag already installed and verified at $exe"
+    $needDownload = $false
+  } else {
+    Warn "cached hellbox failed verification or is a different release - re-downloading"
+  }
 }
 
 if ($needDownload) {
-  $base   = "https://github.com/$Repo/releases/download/$tag"
   $tmpExe = Join-Path $BinDir $asset
   $tmpSum = "$tmpExe.sha256"
   Info "Downloading $asset"
-  Invoke-WebRequest "$base/$asset"        -OutFile $tmpExe
-  Invoke-WebRequest "$base/$asset.sha256" -OutFile $tmpSum
+  Get-ReleaseAsset $asset          $tmpExe
+  Get-ReleaseAsset "$asset.sha256" $tmpSum
 
-  Confirm-Sha256 $tmpExe $tmpSum
+  if (-not (Test-Sha256 $tmpExe $tmpSum)) {
+    $expected = ((Get-Content $tmpSum -Raw).Trim() -split '\s+')[0]
+    $actual   = (Get-FileHash $tmpExe -Algorithm SHA256).Hash
+    Die "SHA256 mismatch for ${asset}:`n  expected $expected`n  got      $actual"
+  }
   Info "Verified SHA256 for $asset"
-  Confirm-Attestation $tmpExe $tag
+  if (-not (Test-Attestation $tmpExe $tag)) {
+    Die "GitHub build-provenance attestation verification failed for $asset"
+  }
   if (-not $SkipAtt) { Info "Verified GitHub build-provenance attestation for $asset" }
 
   Move-Item -Force $tmpExe $exe
@@ -149,18 +174,28 @@ if ($needDownload) {
 }
 
 # --- PATH -------------------------------------------------------------------
-# Persist for future terminals (user PATH) and patch this session so `hellbox`
-# works immediately without reopening the shell.
+# Prepend, not append: if a stale hellbox already sits earlier on PATH (an old
+# manual copy, say), appending would let the advertised `hellbox deploy` keep
+# invoking that one. Prepending makes the binary we just verified win - both for
+# future terminals (user PATH) and this session.
 $normalizedBin = $BinDir.TrimEnd('\')
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 $alreadyUserPath = ($userPath -split ';' | Where-Object { $_.TrimEnd('\') -ieq $normalizedBin }).Count -gt 0
 if (-not $alreadyUserPath) {
-  $newPath = if ([string]::IsNullOrWhiteSpace($userPath)) { $BinDir } else { "$($userPath.TrimEnd(';'));$BinDir" }
+  $newPath = if ([string]::IsNullOrWhiteSpace($userPath)) { $BinDir } else { "$BinDir;$($userPath.TrimEnd(';'))" }
   [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
-  Info "Added $BinDir to your user PATH"
+  Info "Added $BinDir to the front of your user PATH"
 }
-if (($env:Path -split ';' | Where-Object { $_.TrimEnd('\') -ieq $normalizedBin }).Count -eq 0) {
-  $env:Path = "$($env:Path.TrimEnd(';'));$BinDir"
+# This session: drop any existing entry, then prepend, so `hellbox` resolves here now.
+$env:Path = "$BinDir;" + (($env:Path -split ';' | Where-Object { $_ -and ($_.TrimEnd('\') -ine $normalizedBin) }) -join ';')
+
+# Warn if another hellbox is installed elsewhere: this session and new terminals
+# prefer ours, but a shell that puts that directory first would still shadow it.
+$other = Get-Command hellbox -All -ErrorAction SilentlyContinue |
+  Where-Object { $_.Source -and ($_.Source.TrimEnd('\') -ine $exe.TrimEnd('\')) } |
+  Select-Object -First 1
+if ($other) {
+  Warn "another hellbox is on PATH at $($other.Source). This session and new terminals use the one just installed; remove that copy if you want it gone."
 }
 
 # --- Next steps -------------------------------------------------------------

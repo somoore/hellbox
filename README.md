@@ -140,9 +140,12 @@ your PATH. It stops there; you run `hellbox deploy` yourself. It honors `HELLBOX
 (Get-FileHash .\hellbox-windows-x86_64.exe -Algorithm SHA256).Hash -eq `
   (Get-Content .\hellbox-windows-x86_64.exe.sha256 -Raw).Trim().Split()[0].ToUpper()   # -> True
 
-# 2. Verify build provenance (the real trust anchor; needs gh).
+# 2. Verify build provenance (the real trust anchor; needs gh). --source-ref
+#    binds the check to the tag you downloaded, so an older artifact from the
+#    same workflow can't pass. Use the release tag you fetched (e.g. v1.0.17).
 gh attestation verify .\hellbox-windows-x86_64.exe --repo somoore/hellbox `
-  --signer-workflow github.com/somoore/hellbox/.github/workflows/release.yml
+  --signer-workflow github.com/somoore/hellbox/.github/workflows/release.yml `
+  --source-ref refs/tags/<tag>
 
 # 3. Rename to hellbox.exe, move it onto your PATH, then:
 hellbox deploy

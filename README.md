@@ -86,6 +86,10 @@ before `hellbox deploy`; the binary reads the standard AWS credential chain. Use
 Chrome or Edge for the low-latency H.264 path — other browsers can fall back with
 `hellbox config set display vnc`.
 
+**To remove everything**, run `./uninstall.ps1` (the Windows parallel to `uninstall.sh`): it
+tears down the MicroVM, image, bucket, and stack via `hellbox destroy`, then deletes
+`~/.hellbox` and drops it from your PATH.
+
 </details>
 
 <details>
@@ -181,7 +185,7 @@ release builds:
 | Channel | Install | Update | Remove |
 |---|---|---|---|
 | Homebrew | `brew install somoore/hellbox/hellbox` | `brew upgrade hellbox` | `brew uninstall hellbox` |
-| Windows (PowerShell) | `./install.ps1` (or download the exe from Releases) | rerun `install.ps1` | delete the exe |
+| Windows (PowerShell) | `./install.ps1` (or download the exe from Releases) | rerun `install.ps1` | `./uninstall.ps1` |
 | GitHub Releases | [download](https://github.com/somoore/hellbox/releases) (or let `deploy.sh` fetch and verify) | rerun `deploy.sh` | delete the binary |
 | Source | `cd rs-cli && make release` | `git pull` and rebuild | |
 

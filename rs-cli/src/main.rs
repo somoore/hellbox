@@ -5,6 +5,7 @@ mod aws;
 mod browser;
 mod commands;
 mod config;
+mod discover;
 mod embedded;
 mod lifecycle;
 mod poll;

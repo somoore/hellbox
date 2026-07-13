@@ -27,7 +27,8 @@ pub async fn run(refresh: bool) -> Result<()> {
 /// suspended (or terminated) while hellbox wasn't running shows up here.
 async fn reconcile(state: &mut State) -> Result<()> {
     let cfg = Config::load()?;
-    let aws = Aws::new(&cfg).await?;
+    let (sdk, identity) = crate::aws::resolve(&cfg.region).await?;
+    let aws = Aws::from_sdk_config(&sdk);
     let live = aws
         .microvm
         .list_microvms()
@@ -55,6 +56,26 @@ async fn reconcile(state: &mut State) -> Result<()> {
                     })?;
                 }
             }
+        }
+    }
+
+    // Adopt any live MicroVM this system wasn't tracking (a new machine on the
+    // same AWS account, or drifted state). Check the known capsule names plus
+    // the default, so a fresh ~/.hellbox still surfaces an existing DOOM machine.
+    let mut candidates: Vec<String> = state.capsules.keys().cloned().collect();
+    if !candidates.iter().any(|n| n == "doom") {
+        candidates.push("doom".to_string());
+    }
+    for name in candidates {
+        if let Some(imp) =
+            crate::discover::adopt_untracked(&aws, state, &cfg.region, &identity.account, &name)
+                .await?
+        {
+            eprintln!(
+                "note: adopted an untracked '{}' MicroVM ({}) from AWS — run `hellbox` to play it, \
+                 or `hellbox down --name {}` to stop it",
+                imp.name, imp.state, imp.name
+            );
         }
     }
     Ok(())

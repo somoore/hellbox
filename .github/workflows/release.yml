@@ -82,6 +82,86 @@ jobs:
         shell: bash
         run: cp "target/${{ matrix.target }}/release/hellbox.exe" "${{ matrix.asset }}"
 
+      - name: Import Apple Developer ID certificate
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_DEVELOPER_ID_CERTIFICATE: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE }}
+          APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          : "${APPLE_DEVELOPER_ID_CERTIFICATE:?APPLE_DEVELOPER_ID_CERTIFICATE secret is required}"
+          : "${APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD:?APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD secret is required}"
+
+          certificate_path="$RUNNER_TEMP/apple-developer-id.p12"
+          keychain_path="$RUNNER_TEMP/hellbox-signing.keychain-db"
+          keychain_password="$(uuidgen)$(uuidgen)"
+
+          printf '%s' "$APPLE_DEVELOPER_ID_CERTIFICATE" | base64 --decode > "$certificate_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" \
+            -k "$keychain_path" \
+            -P "$APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -s \
+            -k "$keychain_password" \
+            "$keychain_path"
+          security list-keychains -d user -s \
+            "$keychain_path" \
+            "$HOME/Library/Keychains/login.keychain-db"
+          rm -f "$certificate_path"
+
+      - name: Sign macOS asset
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: 'Developer ID Application: Scott Moore (FC439DPN89)'
+        run: |
+          set -euo pipefail
+          codesign \
+            --force \
+            --options runtime \
+            --timestamp \
+            --sign "$APPLE_SIGNING_IDENTITY" \
+            "${{ matrix.asset }}"
+          codesign --verify --strict --verbose=2 "${{ matrix.asset }}"
+
+      # Apple's notarization service accepts ZIP, DMG, or PKG uploads. The
+      # release asset remains the raw signed executable, so wrap it only for
+      # submission; standalone Mach-O files cannot have a ticket stapled.
+      - name: Notarize macOS asset
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_PRIVATE_KEY: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          : "${APPLE_NOTARY_ISSUER_ID:?APPLE_NOTARY_ISSUER_ID secret is required}"
+          : "${APPLE_NOTARY_KEY_ID:?APPLE_NOTARY_KEY_ID secret is required}"
+          : "${APPLE_NOTARY_PRIVATE_KEY:?APPLE_NOTARY_PRIVATE_KEY secret is required}"
+
+          notary_key="$RUNNER_TEMP/AuthKey_${APPLE_NOTARY_KEY_ID}.p8"
+          notary_archive="$RUNNER_TEMP/${{ matrix.asset }}.zip"
+          trap 'rm -f "$notary_key" "$notary_archive"' EXIT
+
+          printf '%s' "$APPLE_NOTARY_PRIVATE_KEY" > "$notary_key"
+          chmod 600 "$notary_key"
+          ditto -c -k --keepParent "${{ matrix.asset }}" "$notary_archive"
+          xcrun notarytool submit "$notary_archive" \
+            --key "$notary_key" \
+            --key-id "$APPLE_NOTARY_KEY_ID" \
+            --issuer "$APPLE_NOTARY_ISSUER_ID" \
+            --wait
+
+          codesign --verify --strict --verbose=2 "${{ matrix.asset }}"
+          spctl --assess --type execute --verbose=4 "${{ matrix.asset }}"
+
       - name: Checksum asset
         shell: bash
         run: |

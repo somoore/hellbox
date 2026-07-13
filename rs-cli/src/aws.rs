@@ -3,7 +3,7 @@
 use anyhow::Result;
 use aws_config::BehaviorVersion;
 use aws_credential_types::Credentials;
-use aws_credential_types::provider::SharedCredentialsProvider;
+use aws_credential_types::provider::{self, ProvideCredentials, error::CredentialsError, future};
 use aws_sdk_lambdamicrovms::Client as MicrovmClient;
 
 use crate::config::Config;
@@ -37,16 +37,6 @@ pub async fn sdk_config(region: &str) -> aws_config::SdkConfig {
     base_loader(region).load().await
 }
 
-/// Same config, but with an explicit static credentials provider. An explicit
-/// provider takes precedence over the default chain, so this bypasses the
-/// profile-file provider entirely (the one that chokes on `login_session`).
-async fn sdk_config_with_creds(region: &str, creds: Credentials) -> aws_config::SdkConfig {
-    base_loader(region)
-        .credentials_provider(SharedCredentialsProvider::new(creds))
-        .load()
-        .await
-}
-
 /// The caller's resolved AWS identity, from STS.
 pub struct Identity {
     pub account: String,
@@ -76,8 +66,11 @@ pub async fn resolve(region: &str) -> Result<(aws_config::SdkConfig, Identity)> 
     // The only failure we can rescue is the login_session parse error; anything
     // else (expired session, no creds at all) falls through to the plain hint.
     if err.contains("credentials-login") {
-        if let Some(creds) = credential_process_credentials() {
-            let sdk = sdk_config_with_creds(region, creds).await;
+        if let Some(command) = active_credential_process() {
+            let sdk = base_loader(region)
+                .credentials_provider(CredentialProcessProvider { command })
+                .load()
+                .await;
             if let Ok(id) = identity_of(&sdk).await {
                 tracing::info!(
                     target: "hellbox::aws",
@@ -132,23 +125,59 @@ async fn identity_of(sdk: &aws_config::SdkConfig) -> std::result::Result<Identit
     }
 }
 
-/// Locate the active profile's `credential_process` command and run it, parsing
-/// the temporary credentials it prints. Returns None when there is no profile
-/// credential_process to run or it doesn't produce usable credentials.
-fn credential_process_credentials() -> Option<Credentials> {
+/// A refreshable credentials provider backed by a profile's `credential_process`
+/// command. Refreshable — not a one-shot static credential — so the SDK re-runs
+/// the command when the temporary credentials expire, matching the AWS CLI/SDK
+/// contract. That matters here: the proxy keeps minting auth tokens (and driving
+/// suspend/resume) with this client for the life of a `hellbox open` session, so
+/// static creds would fail those calls the moment the process credentials lapse.
+#[derive(Debug)]
+struct CredentialProcessProvider {
+    command: String,
+}
+
+impl CredentialProcessProvider {
+    async fn load(&self) -> provider::Result {
+        let command = self.command.clone();
+        // run_credential_process spawns a subprocess (blocking); keep it off the
+        // async worker so a slow helper can't stall the runtime.
+        let stdout = tokio::task::spawn_blocking(move || run_credential_process(&command))
+            .await
+            .map_err(CredentialsError::provider_error)?
+            .ok_or_else(|| {
+                CredentialsError::provider_error("credential_process returned no credentials")
+            })?;
+        parse_process_credentials(&stdout).ok_or_else(|| {
+            CredentialsError::provider_error(
+                "credential_process output was not valid credentials JSON",
+            )
+        })
+    }
+}
+
+impl ProvideCredentials for CredentialProcessProvider {
+    fn provide_credentials<'a>(&'a self) -> future::ProvideCredentials<'a>
+    where
+        Self: 'a,
+    {
+        future::ProvideCredentials::new(self.load())
+    }
+}
+
+/// The active profile's `credential_process` command, if any. Uses the same
+/// profile the SDK selects — `AWS_PROFILE`, else `default` — so we run the exact
+/// profile whose parse just failed. (We deliberately do NOT consult
+/// `AWS_DEFAULT_PROFILE`: that's an AWS CLI compatibility knob the SDK ignores
+/// for profile selection, and honoring it could inject a different account's
+/// credentials than the SDK would ever have used.)
+fn active_credential_process() -> Option<String> {
     let profile = std::env::var("AWS_PROFILE")
         .ok()
         .filter(|p| !p.trim().is_empty())
-        .or_else(|| {
-            std::env::var("AWS_DEFAULT_PROFILE")
-                .ok()
-                .filter(|p| !p.trim().is_empty())
-        })
         .unwrap_or_else(|| "default".to_string());
     let cmd = credential_process_command(&profile)?;
-    tracing::debug!(target: "hellbox::aws", "running credential_process for profile '{profile}'");
-    let stdout = run_credential_process(&cmd)?;
-    parse_process_credentials(&stdout)
+    tracing::debug!(target: "hellbox::aws", "using credential_process for profile '{profile}'");
+    Some(cmd)
 }
 
 /// The AWS config file: `AWS_CONFIG_FILE` if set, else `~/.aws/config`.
@@ -173,8 +202,15 @@ fn credential_process_command(profile: &str) -> Option<String> {
         format!("profile {profile}")
     };
     let mut in_target = false;
-    for line in text.lines() {
-        let line = line.split(['#', ';']).next().unwrap_or("").trim();
+    for raw in text.lines() {
+        let line = raw.trim();
+        // AWS config comments are whole-line only (a leading `#` or `;`). A `#`
+        // or `;` inside a value is literal — the CLI keeps it — so we must not
+        // split it off, or a credential_process command containing one gets
+        // truncated and silently fails.
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
         if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
             in_target = name.trim() == target;
         } else if in_target
@@ -214,9 +250,8 @@ fn run_credential_process(cmd: &str) -> Option<String> {
     Some(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-/// Parse the AWS credential_process JSON contract into static credentials.
-/// Expiry is intentionally dropped: these serve one hellbox run, well within the
-/// process credentials' own lifetime, and a static provider can't refresh anyway.
+/// Parse the AWS credential_process JSON contract into credentials, keeping the
+/// `Expiration` so the SDK refreshes (re-runs the process) before they lapse.
 fn parse_process_credentials(stdout: &str) -> Option<Credentials> {
     #[derive(serde::Deserialize)]
     struct ProcessCreds {
@@ -226,18 +261,29 @@ fn parse_process_credentials(stdout: &str) -> Option<Credentials> {
         secret_access_key: String,
         #[serde(rename = "SessionToken")]
         session_token: Option<String>,
+        #[serde(rename = "Expiration")]
+        expiration: Option<String>,
     }
     let pc: ProcessCreds = serde_json::from_str(stdout.trim()).ok()?;
     if pc.access_key_id.is_empty() || pc.secret_access_key.is_empty() {
         return None;
     }
+    let expires_after = pc.expiration.as_deref().and_then(parse_rfc3339);
     Some(Credentials::new(
         pc.access_key_id,
         pc.secret_access_key,
         pc.session_token,
-        None,
+        expires_after,
         "hellbox-credential-process",
     ))
+}
+
+/// Parse an RFC3339 timestamp (the credential_process `Expiration` format) into
+/// a `SystemTime`. On any parse failure the field is treated as absent.
+fn parse_rfc3339(s: &str) -> Option<std::time::SystemTime> {
+    time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
+        .ok()
+        .map(std::time::SystemTime::from)
 }
 
 /// Guard against acting on the wrong AWS account: config.toml remembers which

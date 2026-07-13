@@ -49,10 +49,14 @@ $BinDir  = Join-Path $HomeDir 'bin'
 $SkipAtt = ($env:HELLBOX_SKIP_ATTESTATION -eq '1')
 
 # --- Target detection -------------------------------------------------------
-switch ($env:PROCESSOR_ARCHITECTURE) {
+# On 32-bit PowerShell running on 64-bit Windows (WOW64), PROCESSOR_ARCHITECTURE
+# reports x86 while PROCESSOR_ARCHITEW6432 holds the real native arch. Prefer the
+# native one so we don't wrongly reject a machine that can run the 64-bit build.
+$nativeArch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+switch ($nativeArch) {
   'AMD64' { $arch = 'x86_64' }
   'ARM64' { $arch = 'arm64' }
-  default { Die "unsupported architecture '$($env:PROCESSOR_ARCHITECTURE)' (hellbox ships x86_64 and arm64 Windows builds)" }
+  default { Die "unsupported architecture '$nativeArch' (hellbox ships x86_64 and arm64 Windows builds)" }
 }
 $asset = "hellbox-windows-$arch.exe"
 
@@ -139,10 +143,18 @@ $sum = Join-Path $BinDir 'hellbox.exe.sha256'
 
 $needDownload = $true
 if ((Test-Path $exe) -and (Test-Path $sum)) {
-  # Re-verify the cache BEFORE trusting or running it. Attestation is bound to
-  # $tag, so a pass also proves the cache is *this* release: an older or tampered
-  # cache fails here and falls through to a fresh, verified download.
-  if ((Test-Sha256 $exe $sum) -and (Test-Attestation $exe $tag)) {
+  # Re-verify the cache BEFORE trusting or running it. SHA256 first (integrity),
+  # then attestation (provenance). A normal attestation is bound to $tag, so a
+  # pass also proves the cache is *this* release. But when HELLBOX_SKIP_ATTESTATION
+  # is set, Test-Attestation is a no-op, so nothing ties the cache to $tag --
+  # confirm the version explicitly (only after SHA256 passed, so we're not running
+  # an unverified binary). An older or tampered cache falls through to a fresh download.
+  $cacheOk = (Test-Sha256 $exe $sum) -and (Test-Attestation $exe $tag)
+  if ($cacheOk -and $SkipAtt) {
+    $cachedVer = try { (& $exe --version 2>$null).Split()[1] } catch { $null }
+    if ($cachedVer -ne $tag.TrimStart('v')) { $cacheOk = $false }
+  }
+  if ($cacheOk) {
     Info "hellbox $tag already installed and verified at $exe"
     $needDownload = $false
   } else {
@@ -189,13 +201,22 @@ if (-not $alreadyUserPath) {
 # This session: drop any existing entry, then prepend, so `hellbox` resolves here now.
 $env:Path = "$BinDir;" + (($env:Path -split ';' | Where-Object { $_ -and ($_.TrimEnd('\') -ine $normalizedBin) }) -join ';')
 
-# Warn if another hellbox is installed elsewhere: this session and new terminals
-# prefer ours, but a shell that puts that directory first would still shadow it.
+# Warn if another hellbox is installed elsewhere. We prepend to *user* PATH, but
+# new processes build PATH as machine-entries-then-user-entries, so a hellbox on
+# the MACHINE PATH still shadows ours in fresh terminals (this session is fine --
+# we patched it above). Call that out specifically, since the fix differs.
 $other = Get-Command hellbox -All -ErrorAction SilentlyContinue |
   Where-Object { $_.Source -and ($_.Source.TrimEnd('\') -ine $exe.TrimEnd('\')) } |
   Select-Object -First 1
 if ($other) {
-  Warn "another hellbox is on PATH at $($other.Source). This session and new terminals use the one just installed; remove that copy if you want it gone."
+  $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+  $otherDir = (Split-Path $other.Source -Parent).TrimEnd('\')
+  $onMachine = ($machinePath -split ';' | Where-Object { $_.TrimEnd('\') -ieq $otherDir }).Count -gt 0
+  if ($onMachine) {
+    Warn "another hellbox is on the machine PATH at $($other.Source). New terminals resolve machine PATH before your user PATH, so they will run that one, not the copy just installed. Remove it, or invoke this build by full path: $exe"
+  } else {
+    Warn "another hellbox is on PATH at $($other.Source). This session and new terminals prefer the copy just installed; remove that one if you want it gone."
+  }
 }
 
 # --- Next steps -------------------------------------------------------------

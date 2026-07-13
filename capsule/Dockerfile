@@ -3,9 +3,17 @@
 # file is already SHA256-verified). Update the digest deliberately when bumping.
 FROM public.ecr.aws/lambda/microvms:al2023-minimal@sha256:05cb9b38d841e7ff1b693dc9e894909612f340bf99ec97d426e8000a5bbe96c3
 
-ARG FFMPEG_RELEASE=autobuild-2026-06-26-13-36
-ARG FFMPEG_ASSET=ffmpeg-n8.1.2-linuxarm64-gpl-8.1.tar.xz
-ARG FFMPEG_SHA256=42be928da25b3e1f7dc271b78a0087dbfcf4738df1d7bf46d158a86eedb285da
+# ffmpeg is a BtbN linuxarm64-gpl build (n8.1.2 branch, has libopus), but served
+# from OUR capsule-prebuilt-1 release, not from BtbN directly: BtbN purges dated
+# autobuild releases after ~2 weeks, which turned the previous direct pin into a
+# guaranteed 404 (curl exit 22 -> image CREATE_FAILED for every fresh build once
+# the pinned autobuild aged out). Mirrored bytes stay hash-pinned here and the
+# libopus check below still gates the build. To bump: download a newer BtbN
+# linuxarm64-gpl tarball, `gh release upload capsule-prebuilt-1 <tarball>`, then
+# update these three ARGs together.
+ARG FFMPEG_RELEASE=capsule-prebuilt-1
+ARG FFMPEG_ASSET=ffmpeg-n8.1.2-22-g94138f6973-linuxarm64-gpl-8.1.tar.xz
+ARG FFMPEG_SHA256=0a34477fb47a9c108b869fccc9919e00d0c7ebf886e8d45301c74d2d46640d64
 ARG NOVNC_VERSION=1.5.0
 ARG NOVNC_SHA256=6a73e41f98388a5348b7902f54b02d177cb73b7e5eb0a7a0dcf688cc2c79b42a
 # SDL2 stack + Chocolate Doom, compiled once in CI inside this exact base image
@@ -35,15 +43,15 @@ RUN python3.11 -m pip install --no-cache-dir --only-binary=:all: --require-hashe
         -r /tmp/capsule-requirements.txt \
     && rm -f /tmp/capsule-requirements.txt
 
-# Pinned ffmpeg build with libopus.
+# Pinned ffmpeg build with libopus (BtbN bytes, mirrored on our release — see ARGs).
 RUN set -e; \
     cd /tmp; \
-    curl -fsSL --retry 3 --max-time 240 -o btbn.tar.xz \
-      "https://github.com/BtbN/FFmpeg-Builds/releases/download/${FFMPEG_RELEASE}/${FFMPEG_ASSET}"; \
-    printf '%s  %s\n' "$FFMPEG_SHA256" btbn.tar.xz | sha256sum -c -; \
-    mkdir -p /opt/ff && tar -xJf btbn.tar.xz -C /opt/ff --strip-components=1; \
+    curl -fsSL --retry 3 --max-time 240 -o ffmpeg.tar.xz \
+      "https://github.com/somoore/hellbox/releases/download/${FFMPEG_RELEASE}/${FFMPEG_ASSET}"; \
+    printf '%s  %s\n' "$FFMPEG_SHA256" ffmpeg.tar.xz | sha256sum -c -; \
+    mkdir -p /opt/ff && tar -xJf ffmpeg.tar.xz -C /opt/ff --strip-components=1; \
     install -m 0755 /opt/ff/bin/ffmpeg /usr/local/bin/ffmpeg; \
-    rm -rf /tmp/btbn.tar.xz /opt/ff; \
+    rm -rf /tmp/ffmpeg.tar.xz /opt/ff; \
     ffmpeg -version | head -1; \
     ffmpeg -hide_banner -encoders 2>/dev/null | grep -q libopus || { echo "FATAL: ffmpeg lacks libopus encoder"; exit 1; }
 

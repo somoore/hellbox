@@ -108,8 +108,13 @@ hellbox reads AWS credentials exactly the way the AWS CLI v2 does, through the S
 default provider chain: environment variables, `~/.aws/credentials` and `~/.aws/config`
 profiles (`AWS_PROFILE` respected), IAM Identity Center / SSO login sessions, and
 `credential_process` helpers like Granted's `assume`. If `aws sts get-caller-identity`
-works in your shell, hellbox almost always works too — the one known exception is a
-profile that carries a `login_session` key (see Troubleshooting).
+works in your shell, hellbox works.
+
+Some profiles (Granted / Common Fate, and newer AWS CLI logins) carry a `login_session`
+key the Rust SDK can't parse directly. hellbox handles those by running the profile's own
+`credential_process` — the same command the AWS CLI runs — so `assume <profile>` followed by
+`hellbox` just works. If that ever fails to yield credentials (usually an expired session),
+see Troubleshooting.
 
 Commands that touch AWS start with an identity check. If credentials are missing or
 expired you get a plain explanation and the usual fixes (`aws sso login`, `assume`,
@@ -179,16 +184,14 @@ ephemeral port and prints the URL it actually bound.
 **`could not mint auth token (capsule may be suspended)`**. Informational. `open` starts a
 control-only page, Resume works from there, and the token gets re-minted on resume.
 
-**`credentials-login` / `login_session` profile error**. If a command fails with a
-credential error mentioning `credentials-login`, your profile carries a `login_session`
-key (Granted / Common Fate, or a newer AWS CLI login). The AWS CLI tolerates that key, but
-hellbox's AWS SDK resolves it through a native login-session cache that Granted never
-writes, so the profile fails here even though `aws sts get-caller-identity` works with it.
-Two fixes: (1) export env-var credentials —
-`aws configure export-credentials --profile <name> --format env` — set them, and clear
-`AWS_PROFILE` before running hellbox; or (2) remove the `login_session` line from the
-profile in `~/.aws/config` so hellbox uses its `credential_process` (e.g. `granted
-credential-process`), which resolves fine.
+**`login_session` profile still failing**. A profile carrying a `login_session` key
+(Granted / Common Fate, or a newer AWS CLI login) can't be parsed by the Rust SDK directly,
+so hellbox falls back to running the profile's `credential_process` automatically. If you
+still see "AWS credentials could not be resolved from your profile", that fallback ran but
+got nothing back — usually an expired session. Refresh it (`assume <profile>`, or `aws sso
+login`) and retry. If it persists, either export env-var credentials
+(`aws configure export-credentials --profile <name> --format env`, set them, clear
+`AWS_PROFILE`) or remove the `login_session` line from the profile in `~/.aws/config`.
 
 **Verbose logs**. `RUST_LOG=hellbox=debug hellbox <cmd>`. The proxy logs upstream
 connection failures at `warn` and per-channel verification attempts at `debug`.

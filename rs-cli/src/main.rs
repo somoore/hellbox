@@ -134,14 +134,17 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(feature = "proxy")]
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
-    // Default: our own INFO lines only. Everything else (notably the AWS SDK's
-    // credential-chain chatter, which also prints the access key id) stays at
-    // warn so the console reads clean. `RUST_LOG=hellbox=debug` or `RUST_LOG=info`
-    // opts back into the detail.
+    // Default: our own INFO lines only, everything else at warn so the console
+    // reads clean. aws-config is pinned to error: its credential-chain chatter
+    // (which also prints the access key id) is noise, and it WARNs on the
+    // login_session profile-provider failure that `aws::resolve` expects and
+    // recovers from via credential_process — surfacing that would be alarming
+    // for a case we handle. `RUST_LOG=hellbox=debug` or `RUST_LOG=info` opts
+    // back into the detail.
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "hellbox=info,warn".into()),
+                .unwrap_or_else(|_| "hellbox=info,aws_config=error,warn".into()),
         )
         .with_target(false)
         .init();

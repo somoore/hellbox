@@ -81,8 +81,7 @@ pub async fn run(name: &str, region_flag: Option<&str>, parameters: &[String]) -
     let (template, customized) = template_body()?;
     let params = parse_parameters(parameters)?;
 
-    let sdk = aws::sdk_config(&region).await;
-    let identity = aws::preflight_identity(&sdk).await?;
+    let (sdk, identity) = aws::resolve(&region).await?;
     println!(
         "==> AWS identity: {} (account {})",
         identity.arn, identity.account

@@ -41,6 +41,54 @@ hellbox deploy
 ```
 
 <details>
+<summary><b>Windows install</b></summary>
+<br>
+
+The Homebrew line in the Quickstart is macOS/Linux. On Windows, grab the prebuilt exe —
+no repo clone is required, because `hellbox deploy` carries the CloudFormation template
+and the capsule build context inside the binary.
+
+**From a clone (PowerShell):**
+
+```powershell
+./install.ps1      # downloads the exe, verifies SHA256 + build attestation, adds it to PATH
+hellbox deploy
+```
+
+`install.ps1` is the Windows parallel to `deploy.sh`'s install step. It resolves your
+architecture (x86_64 or arm64), verifies the release's GitHub build-provenance attestation —
+the same trust anchor `deploy.sh` uses — caches the exe under `~/.hellbox/bin`, and puts it on
+your PATH. It stops there; you run `hellbox deploy` yourself. It honors `HELLBOX_VERSION`,
+`HELLBOX_HOME`, and `HELLBOX_SKIP_ATTESTATION` just like `deploy.sh`, and needs the
+[GitHub CLI](https://cli.github.com) (`winget install GitHub.cli`) to check the attestation.
+
+**Without a clone (manual):** download `hellbox-windows-x86_64.exe` (or `-arm64`) and its
+`.sha256` from [Releases](https://github.com/somoore/hellbox/releases/latest), then in PowerShell:
+
+```powershell
+# 1. Confirm the download matches its checksum sidecar.
+(Get-FileHash .\hellbox-windows-x86_64.exe -Algorithm SHA256).Hash -eq `
+  (Get-Content .\hellbox-windows-x86_64.exe.sha256 -Raw).Trim().Split()[0].ToUpper()   # -> True
+
+# 2. Verify build provenance (the real trust anchor; needs gh). --source-ref
+#    binds the check to the tag you downloaded, so an older artifact from the
+#    same workflow can't pass. Use the release tag you fetched (e.g. v1.0.18).
+gh attestation verify .\hellbox-windows-x86_64.exe --repo somoore/hellbox `
+  --signer-workflow github.com/somoore/hellbox/.github/workflows/release.yml `
+  --source-ref refs/tags/<tag>
+
+# 3. Rename to hellbox.exe, move it onto your PATH, then:
+hellbox deploy
+```
+
+Either way you need AWS credentials configured (the AWS CLI, SSO, or environment variables)
+before `hellbox deploy`; the binary reads the standard AWS credential chain. Use current
+Chrome or Edge for the low-latency H.264 path — other browsers can fall back with
+`hellbox config set display vnc`.
+
+</details>
+
+<details>
 <summary><b>What that does, how to play, and how to come back later</b></summary>
 <br>
 
@@ -107,54 +155,6 @@ Edge. `hellbox config set display vnc` switches to the noVNC fallback for other 
 
 **Prefer the repo?** `git clone https://github.com/somoore/hellbox && cd hellbox &&
 ./deploy.sh` does the same thing, and it picks up a `hellbox` already on your PATH.
-
-</details>
-
-<details>
-<summary><b>Windows install</b></summary>
-<br>
-
-The Homebrew line in the Quickstart is macOS/Linux. On Windows, grab the prebuilt exe —
-no repo clone is required, because `hellbox deploy` carries the CloudFormation template
-and the capsule build context inside the binary.
-
-**From a clone (PowerShell):**
-
-```powershell
-./install.ps1      # downloads the exe, verifies SHA256 + build attestation, adds it to PATH
-hellbox deploy
-```
-
-`install.ps1` is the Windows parallel to `deploy.sh`'s install step. It resolves your
-architecture (x86_64 or arm64), verifies the release's GitHub build-provenance attestation —
-the same trust anchor `deploy.sh` uses — caches the exe under `~/.hellbox/bin`, and puts it on
-your PATH. It stops there; you run `hellbox deploy` yourself. It honors `HELLBOX_VERSION`,
-`HELLBOX_HOME`, and `HELLBOX_SKIP_ATTESTATION` just like `deploy.sh`, and needs the
-[GitHub CLI](https://cli.github.com) (`winget install GitHub.cli`) to check the attestation.
-
-**Without a clone (manual):** download `hellbox-windows-x86_64.exe` (or `-arm64`) and its
-`.sha256` from [Releases](https://github.com/somoore/hellbox/releases/latest), then in PowerShell:
-
-```powershell
-# 1. Confirm the download matches its checksum sidecar.
-(Get-FileHash .\hellbox-windows-x86_64.exe -Algorithm SHA256).Hash -eq `
-  (Get-Content .\hellbox-windows-x86_64.exe.sha256 -Raw).Trim().Split()[0].ToUpper()   # -> True
-
-# 2. Verify build provenance (the real trust anchor; needs gh). --source-ref
-#    binds the check to the tag you downloaded, so an older artifact from the
-#    same workflow can't pass. Use the release tag you fetched (e.g. v1.0.17).
-gh attestation verify .\hellbox-windows-x86_64.exe --repo somoore/hellbox `
-  --signer-workflow github.com/somoore/hellbox/.github/workflows/release.yml `
-  --source-ref refs/tags/<tag>
-
-# 3. Rename to hellbox.exe, move it onto your PATH, then:
-hellbox deploy
-```
-
-Either way you need AWS credentials configured (the AWS CLI, SSO, or environment variables)
-before `hellbox deploy`; the binary reads the standard AWS credential chain. Use current
-Chrome or Edge for the low-latency H.264 path — other browsers can fall back with
-`hellbox config set display vnc`.
 
 </details>
 

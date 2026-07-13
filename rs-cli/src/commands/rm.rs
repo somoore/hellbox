@@ -50,12 +50,70 @@ pub async fn run(name: &str) -> Result<()> {
     }
 
     if let Some(image_arn) = cap.image_arn.clone() {
+        // DeleteMicrovmImage also fails on a MicroVM the local state never
+        // recorded (a stale deploy, a MicroVM the platform re-created, or state
+        // that drifted). Terminating only `cap.microvm_id` above leaves those
+        // orphans attached and the delete loops until timeout. Enumerate every
+        // MicroVM built from this image and terminate the live ones first.
+        terminate_image_microvms(&aws, name, &image_arn).await?;
         delete_image_with_retry(&aws, &image_arn).await?;
         tracing::info!(target: "hellbox::rm", "deleted image {image_arn}");
     }
 
     state.remove(name)?;
     println!("rm '{name}': image deleted, capsule removed from state");
+    Ok(())
+}
+
+/// Terminate every non-terminated MicroVM built from `image_arn` and wait it
+/// out, so a delete of that image isn't blocked by a MicroVM local state forgot.
+async fn terminate_image_microvms(aws: &Aws, name: &str, image_arn: &str) -> Result<()> {
+    let live = aws
+        .microvm
+        .list_microvms()
+        .send()
+        .await
+        .context("list_microvms")?;
+    let ids: Vec<String> = live
+        .items()
+        .iter()
+        .filter(|m| m.image_arn() == image_arn && m.state().as_str() != "TERMINATED")
+        .map(|m| m.microvm_id().to_string())
+        .collect();
+
+    for id in &ids {
+        tracing::info!(target: "hellbox::rm", "terminating microvm {id} (built from the image being removed)");
+        let _ = aws
+            .microvm
+            .terminate_microvm()
+            .microvm_identifier(id)
+            .send()
+            .await;
+    }
+    for id in &ids {
+        // A get error means it is already gone; treat that as TERMINATED.
+        let _ = poll_until(
+            &format!("microvm {name}"),
+            &["TERMINATED"],
+            PollOpts {
+                interval: Duration::from_secs(3),
+                timeout: Duration::from_secs(180),
+            },
+            || async {
+                match aws
+                    .microvm
+                    .get_microvm()
+                    .microvm_identifier(id)
+                    .send()
+                    .await
+                {
+                    Ok(o) => Ok(o.state().as_str().to_string()),
+                    Err(_) => Ok("TERMINATED".to_string()),
+                }
+            },
+        )
+        .await;
+    }
     Ok(())
 }
 

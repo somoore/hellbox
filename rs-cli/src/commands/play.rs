@@ -23,15 +23,42 @@ pub async fn run_with_verify(name: &str, strict: bool) -> Result<()> {
     let cfg = Config::load()?;
     let mut state = State::load()?;
 
-    let capsule = match state.get(name) {
-        Some(c) => c.clone(),
-        None => bail!("no capsule named '{name}' — run `hellbox deploy` first"),
-    };
-
     // Friendly credential check + wrong-account guard before touching anything.
     let (sdk, identity) = crate::aws::resolve(&cfg.region).await?;
     crate::aws::require_same_account(&cfg, &identity)?;
     let aws = Aws::from_sdk_config(&sdk);
+
+    // A live MicroVM this machine wasn't tracking (a new computer on the same
+    // AWS account, or drifted state). Import it, then let the user decide.
+    // `deploy` (strict) runs its own adopt prompt, so don't double-ask there.
+    if !strict
+        && let Some(imp) =
+            crate::discover::adopt_untracked(&aws, &mut state, &cfg.region, &identity.account, name)
+                .await?
+    {
+        println!(
+            "==> Found a '{name}' machine in AWS ({}) that this system wasn't tracking — \
+             likely from another computer on this AWS account. Imported it locally.",
+            imp.state
+        );
+        match crate::discover::ask("Play it now, Terminate it, or Keep and quit? [P/t/k]:", 'p') {
+            't' => {
+                super::down::run(name).await?;
+                println!("terminated '{name}'. Run `hellbox` to launch a fresh machine.");
+                return Ok(());
+            }
+            'k' => {
+                println!("kept '{name}' tracked locally. Run `hellbox` to play it.");
+                return Ok(());
+            }
+            _ => {} // play it: fall through
+        }
+    }
+
+    let capsule = match state.get(name) {
+        Some(c) => c.clone(),
+        None => bail!("no capsule named '{name}' — run `hellbox deploy` first"),
+    };
 
     // Reconcile with AWS; this is also the credentials check.
     let live_state = match &capsule.microvm_id {

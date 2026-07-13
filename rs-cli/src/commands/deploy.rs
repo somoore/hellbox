@@ -297,9 +297,22 @@ async fn reconcile_state(
     })?;
     if !already {
         match &live_microvm {
-            Some((_, st)) => println!(
-                "==> Found an existing '{name}' image and MicroVM ({st}) in AWS — adopting them"
-            ),
+            Some((_, st)) => {
+                println!(
+                    "==> Found an existing '{name}' image and MicroVM ({st}) in AWS — imported it \
+                     (likely from another computer on this AWS account)"
+                );
+                if crate::discover::ask(
+                    "Keep and reuse it, or Terminate it and start fresh? [K/t]:",
+                    'k',
+                ) == 't'
+                {
+                    super::down::run(name).await.ok();
+                    println!(
+                        "terminated the existing '{name}' machine; deploy will launch a fresh one"
+                    );
+                }
+            }
             None => println!("==> Found an existing '{name}' image in AWS — adopting it"),
         }
     }

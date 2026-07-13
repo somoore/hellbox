@@ -1313,6 +1313,7 @@ version = "1.0.17"
 dependencies = [
  "anyhow",
  "aws-config",
+ "aws-credential-types",
  "aws-sdk-cloudformation",
  "aws-sdk-lambdamicrovms",
  "aws-sdk-s3",

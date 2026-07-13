@@ -46,6 +46,9 @@ aws-sdk-cloudformation = { version = "1", default-features = false, features = [
 aws-sdk-sts = { version = "1", default-features = false, features = [
     "default-https-client", "rt-tokio",
 ] }
+# Inject static creds when we resolve a login_session profile via its own
+# credential_process (see aws.rs). Already in the tree via aws-config.
+aws-credential-types = "1"
 
 # build artifact
 zip = "8.6"

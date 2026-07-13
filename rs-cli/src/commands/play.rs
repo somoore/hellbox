@@ -29,8 +29,7 @@ pub async fn run_with_verify(name: &str, strict: bool) -> Result<()> {
     };
 
     // Friendly credential check + wrong-account guard before touching anything.
-    let sdk = crate::aws::sdk_config(&cfg.region).await;
-    let identity = crate::aws::preflight_identity(&sdk).await?;
+    let (sdk, identity) = crate::aws::resolve(&cfg.region).await?;
     crate::aws::require_same_account(&cfg, &identity)?;
     let aws = Aws::from_sdk_config(&sdk);
 

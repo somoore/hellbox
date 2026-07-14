@@ -271,6 +271,21 @@ fn keys_are_sso(keys: &[(String, String)]) -> bool {
 /// off-switch: hellbox never launches the browser without a yes.
 fn sso_login(profile: &str) -> Result<bool> {
     use std::io::Write;
+
+    // Only the AWS CLI can mint an SSO token, so if it is not installed there is
+    // nothing to prompt for. Say so plainly (and don't offer a sign-in that
+    // can't run), then fall through to the normal credentials error.
+    if !aws_cli_available() {
+        eprintln!(
+            "Profile '{profile}' uses IAM Identity Center (SSO), which needs the AWS CLI to \
+             sign in, and it is not on your PATH.\n  \
+             Install it (https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html), \
+             run `aws sso login --profile {profile}`, then retry.\n  \
+             (Or use a profile with static keys / a credential_process helper instead.)"
+        );
+        return Ok(false);
+    }
+
     eprint!("SSO session for profile '{profile}' is missing or expired. Sign in now? [Y/n] ");
     std::io::stderr().flush().ok();
 
@@ -297,6 +312,18 @@ fn sso_login(profile: &str) -> Result<bool> {
             "could not run `aws sso login` (is the AWS CLI installed and on PATH?): {e}"
         ),
     }
+}
+
+/// Is the AWS CLI on PATH? Probe with `aws --version`, output discarded. Runs
+/// only on the SSO rescue path (rare), so the one spawn is not a hot path.
+fn aws_cli_available() -> bool {
+    use std::process::{Command, Stdio};
+    Command::new("aws")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
 }
 
 /// The AWS config file: `AWS_CONFIG_FILE` if set, else `~/.aws/config`.

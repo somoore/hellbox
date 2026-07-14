@@ -22,8 +22,10 @@ pub struct Imported {
 }
 
 /// hellbox's deterministic image ARN for a capsule `name`. Adoption is scoped to
-/// this exact ARN so we never adopt some unrelated MicroVM in the account.
-fn image_arn(region: &str, account: &str, name: &str) -> String {
+/// this exact ARN so we never adopt some unrelated MicroVM in the account. Also
+/// lets `rm` target an image the local state never recorded (a failed build on a
+/// fresh machine), since the ARN is fully determined by region/account/name.
+pub fn image_arn(region: &str, account: &str, name: &str) -> String {
     format!("arn:aws:lambda:{region}:{account}:microvm-image:{name}")
 }
 

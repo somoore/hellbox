@@ -12,8 +12,20 @@ use crate::state::State;
 pub async fn run(name: &str) -> Result<()> {
     let cfg = Config::load()?;
     let mut state = State::load()?;
-    let cap = state.require(name)?.clone();
-    let aws = Aws::new(&cfg).await?;
+    // Do NOT hard-require local state: a failed build (or a fresh machine, e.g.
+    // a Windows install that never saw the earlier attempt) can leave an image
+    // in AWS that local state never recorded. `rm` must still be able to clear
+    // it, or the account wedges: `deploy` says "image exists, rm first" and
+    // `rm` says "not in state". The image ARN is deterministic, so reconstruct
+    // it when state is missing.
+    let cap = state.get(name).cloned().unwrap_or_default();
+    let (sdk, identity) =
+        crate::aws::resolve_with_profile(&cfg.region, cfg.aws_profile.as_deref()).await?;
+    let aws = Aws::from_sdk_config(&sdk);
+    let image_arn = cap
+        .image_arn
+        .clone()
+        .unwrap_or_else(|| crate::discover::image_arn(&cfg.region, &identity.account, name));
 
     // DeleteMicrovmImage fails while a MicroVM is live.
     if let Some(microvm_id) = cap.microvm_id.clone() {
@@ -49,16 +61,15 @@ pub async fn run(name: &str) -> Result<()> {
         .await;
     }
 
-    if let Some(image_arn) = cap.image_arn.clone() {
-        // DeleteMicrovmImage also fails on a MicroVM the local state never
-        // recorded (a stale deploy, a MicroVM the platform re-created, or state
-        // that drifted). Terminating only `cap.microvm_id` above leaves those
-        // orphans attached and the delete loops until timeout. Enumerate every
-        // MicroVM built from this image and terminate the live ones first.
-        terminate_image_microvms(&aws, name, &image_arn).await?;
-        delete_image_with_retry(&aws, &image_arn).await?;
-        tracing::info!(target: "hellbox::rm", "deleted image {image_arn}");
-    }
+    // DeleteMicrovmImage also fails on a MicroVM the local state never recorded
+    // (a stale deploy, a MicroVM the platform re-created, or state that drifted).
+    // Terminating only `cap.microvm_id` above leaves those orphans attached and
+    // the delete loops until timeout. Enumerate every MicroVM built from this
+    // image and terminate the live ones first.
+    terminate_image_microvms(&aws, name, &image_arn).await?;
+    // delete_image_with_retry treats a not-found image as success (idempotent),
+    // so a fresh machine clearing an already-gone orphan still succeeds.
+    delete_image_with_retry(&aws, &image_arn).await?;
 
     state.remove(name)?;
     println!("rm '{name}': image deleted, capsule removed from state");
@@ -133,6 +144,14 @@ async fn delete_image_with_retry(aws: &Aws, image_arn: &str) -> Result<()> {
         {
             Ok(_) => return Ok(()),
             Err(e) => {
+                // Not found = already gone. Deleting a nonexistent image is the
+                // desired end state (idempotent), so report success. This is the
+                // fresh-machine case: rm targets a deterministic ARN that may no
+                // longer exist.
+                if e.code() == Some("ResourceNotFoundException") {
+                    tracing::info!(target: "hellbox::rm", "image {image_arn} already gone");
+                    return Ok(());
+                }
                 let transient = e
                     .message()
                     .map(|m| m.contains("running MicroVM"))

@@ -34,7 +34,10 @@ pub async fn run(name: &str, app: Option<&str>, capsule_dir_override: Option<&st
 
     let key = format!("contexts/{name}.zip");
     let bytes = std::fs::read(context_zip.path()).context("reading context zip")?;
-    let aws = Aws::new(&cfg).await?;
+    let (sdk, identity) =
+        crate::aws::resolve_with_profile(&cfg.region, cfg.aws_profile.as_deref()).await?;
+    let aws = Aws::from_sdk_config(&sdk);
+    let image_arn_expected = crate::discover::image_arn(&cfg.region, &identity.account, name);
     aws.s3
         .put_object()
         .bucket(&cfg.artifact_bucket)
@@ -70,11 +73,6 @@ pub async fn run(name: &str, app: Option<&str>, capsule_dir_override: Option<&st
                 .build(),
         )
         .build();
-    // If local state has no image for this name, an "already exists" from the
-    // service almost certainly means a just-issued DeleteMicrovmImage is still
-    // completing (deletion is async and the name stays reserved meanwhile), so
-    // retry rather than fail — the exact path `hellbox destroy` + `deploy` hits.
-    let known_image = state.get(name).and_then(|c| c.image_arn.clone()).is_some();
     let token = client_token(name);
     let mut delete_lag_retries = 0u32;
     let created = loop {
@@ -97,21 +95,47 @@ pub async fn run(name: &str, app: Option<&str>, capsule_dir_override: Option<&st
                     .message()
                     .map(|m| m.contains("already exists"))
                     .unwrap_or(false);
-                if already_exists && !known_image && delete_lag_retries < 18 {
-                    delete_lag_retries += 1;
-                    tracing::info!(
-                        target: "hellbox::build",
-                        "image name '{name}' still releasing after a delete — retrying create ({delete_lag_retries}/18)"
-                    );
-                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-                    continue;
-                }
                 if already_exists {
-                    bail!(
-                        "image '{name}' already exists — `hellbox up --name {name}` launches it \
-                         as-is; to rebuild from the current capsule, `hellbox rm --name {name}` \
-                         first, then build again"
-                    );
+                    // "Already exists" has three causes, and they need different
+                    // handling. Inspect the existing image to tell them apart.
+                    match existing_image_state(&aws, &image_arn_expected).await {
+                        // A dead image from a prior failed build blocks the name
+                        // forever otherwise (deploy says "rm first", but a fresh
+                        // machine's rm has no state). Delete it and retry.
+                        Some(state) if is_dead_image(&state) => {
+                            tracing::info!(
+                                target: "hellbox::build",
+                                "existing image '{name}' is {state}; deleting the dead image and rebuilding"
+                            );
+                            let _ = aws
+                                .microvm
+                                .delete_microvm_image()
+                                .image_identifier(&image_arn_expected)
+                                .send()
+                                .await;
+                            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                            continue;
+                        }
+                        // No image actually present: a just-issued delete is
+                        // still releasing the name (async). Retry a bounded while.
+                        None if delete_lag_retries < 18 => {
+                            delete_lag_retries += 1;
+                            tracing::info!(
+                                target: "hellbox::build",
+                                "image name '{name}' still releasing after a delete, retrying create ({delete_lag_retries}/18)"
+                            );
+                            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                            continue;
+                        }
+                        // A healthy image the user may want: don't clobber it.
+                        _ => {
+                            bail!(
+                                "image '{name}' already exists and is usable. `hellbox up --name \
+                                 {name}` launches it as-is; to rebuild from the current capsule, \
+                                 `hellbox rm --name {name}` first, then build again"
+                            );
+                        }
+                    }
                 }
                 return Err(e).context("create_microvm_image");
             }
@@ -170,6 +194,28 @@ pub async fn run(name: &str, app: Option<&str>, capsule_dir_override: Option<&st
 
     println!("built '{name}': image {image_arn} CREATED");
     Ok(())
+}
+
+/// The state of the image at `arn`, or None if it does not exist. Used to tell a
+/// dead leftover image apart from a name still releasing after an async delete.
+async fn existing_image_state(aws: &Aws, arn: &str) -> Option<String> {
+    aws.microvm
+        .get_microvm_image()
+        .image_identifier(arn)
+        .send()
+        .await
+        .ok()
+        .map(|o| o.state().as_str().to_string())
+}
+
+/// True for an image state that means the image is unusable and safe to replace:
+/// a failed build, mid-delete, or a terminal error state. A CREATED image is
+/// deliberately NOT dead, so we never clobber one the user might want to launch.
+fn is_dead_image(state: &str) -> bool {
+    matches!(
+        state.to_ascii_uppercase().as_str(),
+        "CREATE_FAILED" | "CREATEFAILED" | "DELETING" | "DELETE_FAILED" | "FAILED"
+    )
 }
 
 /// Keeps an extracted embedded capsule alive for the duration of the build.
@@ -397,6 +443,20 @@ fn validate_zip_file_entry(path: &Path, rel: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dead_image_states_are_replaceable_but_created_is_not() {
+        // Failed/deleting states are safe to clobber and rebuild.
+        assert!(is_dead_image("CREATE_FAILED"));
+        assert!(is_dead_image("CreateFailed"));
+        assert!(is_dead_image("DELETING"));
+        assert!(is_dead_image("DELETE_FAILED"));
+        // A usable image must never be treated as dead (we'd destroy the user's
+        // working image on a plain rebuild otherwise).
+        assert!(!is_dead_image("CREATED"));
+        assert!(!is_dead_image("Created"));
+        assert!(!is_dead_image("CREATING"));
+    }
 
     // Unique scratch dir under the system temp, cleaned up on drop. Avoids a
     // tempfile dev-dependency for one test.

@@ -100,11 +100,15 @@ pub async fn resolve(region: &str) -> Result<(aws_config::SdkConfig, Identity)> 
          hellbox reads credentials the same way the AWS CLI does: environment \
          variables, ~/.aws profiles (AWS_PROFILE), IAM Identity Center / SSO \
          logins, and credential_process tools like Granted.\n\
+         Note: unlike the aws CLI, a `--profile` you pass to *another* command \
+         does not carry over. If `aws --profile <name> sts get-caller-identity` \
+         works, tell hellbox the same profile.\n\
          Things to try:\n  \
-         - `aws sts get-caller-identity` (does the AWS CLI work right now?)\n  \
-         - `aws sso login` if your session expired\n  \
+         - `hellbox --profile <name> <command>` (matches `aws --profile`)\n  \
+         - `export AWS_PROFILE=<name>` to set it for the whole shell\n  \
+         - `aws sso login --profile <name>` if your SSO session expired\n  \
          - `assume <profile>` if you use Granted\n  \
-         - `export AWS_PROFILE=<name>` if you have multiple profiles"
+         - `aws sts get-caller-identity` (does the AWS CLI work right now?)"
     );
 }
 

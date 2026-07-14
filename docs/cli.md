@@ -110,6 +110,13 @@ profiles (`AWS_PROFILE` respected), IAM Identity Center / SSO login sessions, an
 `credential_process` helpers like Granted's `assume`. If `aws sts get-caller-identity`
 works in your shell, hellbox works.
 
+Selecting a profile: pass `--profile <name>` (it works anywhere on the line, like the AWS
+CLI: `hellbox --profile prod deploy` or `hellbox deploy --profile prod`), or
+`export AWS_PROFILE=<name>` for the whole shell. One gotcha: a `--profile` you pass to a
+*different* command does not carry over. `aws --profile prod sts get-caller-identity`
+selects the profile only for that one `aws` call, so a bare `hellbox deploy` afterward still
+uses your default profile. Tell hellbox the profile too.
+
 Some profiles (Granted / Common Fate, and newer AWS CLI logins) carry a `login_session`
 key the Rust SDK can't parse directly. hellbox handles those by running the profile's own
 `credential_process` — the same command the AWS CLI runs — so `assume <profile>` followed by

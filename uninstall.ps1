@@ -4,14 +4,17 @@
   Remove Hellbox AWS resources and local state on Windows.
 
 .DESCRIPTION
-  The Windows / PowerShell parallel to uninstall.sh. It tears down the MicroVM,
-  image, artifact bucket, and CloudFormation stack, then removes ~/.hellbox
-  (binary, config, state) and drops that directory from your user PATH.
+  The Windows / PowerShell parallel to uninstall.sh. It removes ~/.hellbox
+  (binary, config, state) and drops that directory from your user PATH. It can
+  ALSO tear down your AWS resources (MicroVM, image, artifact bucket, and
+  CloudFormation stack), but only after you confirm: the default is to keep
+  everything in AWS. Removing the CLI never silently deletes cloud resources.
 
-  Teardown runs through `hellbox destroy --yes` -- the CLI's own SDK-based
-  teardown, which reads the standard AWS credential chain (no AWS CLI needed and
-  no typed confirmation with --yes). If the binary is gone but a stack is still
-  configured, it falls back to the AWS CLI.
+  When you confirm, teardown runs through `hellbox destroy --yes` -- the CLI's
+  own SDK-based teardown, which reads the standard AWS credential chain (no AWS
+  CLI needed). If the binary is gone but a stack is still configured, it falls
+  back to the AWS CLI. Set $env:HELLBOX_YES = '1' to confirm non-interactively
+  (for scripts); a non-interactive shell without it keeps AWS resources.
 
   Local-state deletion is guarded the same way uninstall.sh is: it refuses to
   remove a path that is a symlink, your home directory (or a parent of it), the
@@ -23,6 +26,7 @@
     HELLBOX_STACK   default Hellbox
     HELLBOX_NAME    default doom
     HELLBOX_BIN     explicit path to the hellbox binary
+    HELLBOX_YES     set to 1 to confirm AWS teardown non-interactively
     AWS_REGION      fallback region when config.toml has none
 
 .EXAMPLE
@@ -114,16 +118,40 @@ try {
 } catch { }
 
 # --- 2. Tear down AWS ---------------------------------------------------------
+# AWS teardown is opt-in and confirmed. Uninstalling the CLI must never silently
+# delete a user's cloud resources. Default is to KEEP everything in AWS; the user
+# (or $env:HELLBOX_YES = '1' for scripts) has to say yes.
+$removeAws = $false
+if (Test-Path $configPath) {
+  if ($env:HELLBOX_YES -eq '1') {
+    $removeAws = $true
+    Info "HELLBOX_YES=1 set: will remove AWS resources (MicroVM, image, bucket, stack)."
+  }
+  elseif ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+    Write-Host ""
+    Write-Host "This can also delete your Hellbox AWS resources:" -ForegroundColor Yellow
+    Write-Host "  - the DOOM MicroVM and its image"
+    Write-Host "  - the CloudFormation stack ('$Stack') and its S3 artifact bucket"
+    Write-Host "These live in YOUR AWS account. Deleting them is irreversible."
+    $reply = Read-Host "Remove them now? [y/N]"
+    if ($reply -match '^(y|yes)$') { $removeAws = $true }
+    else { Info "Keeping all AWS resources. Run 'hellbox destroy' (or re-run with HELLBOX_YES=1) to remove them later." }
+  }
+  else {
+    Info "Non-interactive shell: keeping AWS resources. Set HELLBOX_YES=1 to remove them, or run 'hellbox destroy'."
+  }
+}
+
 # `hellbox destroy` needs a config.toml (it reads the region/account/stack from
 # it, and skips gracefully when the stack is already gone). With no config there
 # is nothing to tear down, so don't invoke it just to fail.
-if ($exe -and (Test-Path $configPath)) {
+if ($removeAws -and $exe -and (Test-Path $configPath)) {
   Info "Tearing down AWS resources: $exe destroy --yes"
   $env:HELLBOX_HOME = $HomeDir
   & $exe destroy --yes
   if ($LASTEXITCODE -ne 0) { Warn "hellbox destroy failed (exit $LASTEXITCODE)"; $failed = $true }
 }
-elseif (Test-Path $configPath) {
+elseif ($removeAws -and (Test-Path $configPath)) {
   # No binary, but a stack may still exist. Fall back to the AWS CLI.
   if (-not (Have aws)) {
     Warn "no hellbox binary and no AWS CLI found -- cannot tear down AWS. Delete the '$Stack' stack manually."
@@ -157,9 +185,11 @@ elseif (Test-Path $configPath) {
     }
   }
 }
-else {
+elseif (-not (Test-Path $configPath)) {
   Info "No config found -- nothing to tear down in AWS."
 }
+# else: config exists but the user declined teardown; the prompt block above
+# already said so, so stay quiet here.
 
 if ($failed) {
   Warn "uninstall finished with errors -- local state was left in place so cleanup can be retried after fixing AWS access."

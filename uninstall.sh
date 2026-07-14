@@ -171,6 +171,31 @@ if command -v pkill >/dev/null 2>&1; then
   fi
 fi
 
+# AWS teardown is opt-in and confirmed. Removing the CLI must never silently
+# delete a user's cloud resources. Default is to KEEP everything in AWS; the
+# user (or HELLBOX_YES=1 for scripts) has to say yes to tear it down.
+REMOVE_AWS=0
+if [ "${HELLBOX_YES:-0}" = "1" ]; then
+  REMOVE_AWS=1
+  say "HELLBOX_YES=1 set: will remove AWS resources (MicroVM, image, bucket, stack)."
+elif [ -t 0 ]; then
+  printf '\n\033[1;33mThis can also delete your Hellbox AWS resources:\033[0m\n'
+  printf '  - the DOOM MicroVM and its image\n'
+  printf '  - the CloudFormation stack (%s) and its S3 artifact bucket\n' "${stack_specs[0]##*|}"
+  printf 'These live in YOUR AWS account. Deleting them is irreversible.\n'
+  printf 'Remove them now? [y/N] '
+  read -r reply
+  case "$reply" in
+    [yY]|[yY][eE][sS]) REMOVE_AWS=1 ;;
+    *) say "Keeping all AWS resources. Run \`hellbox destroy\` (or re-run with HELLBOX_YES=1) to remove them later." ;;
+  esac
+else
+  # No terminal to ask and no explicit yes: keep AWS resources, never guess.
+  say "Non-interactive shell: keeping AWS resources. Set HELLBOX_YES=1 to remove them, or run \`hellbox destroy\`."
+fi
+
+if [ "$REMOVE_AWS" = 1 ]; then
+
 # MicroVM + image.
 for spec in "${home_specs[@]}"; do
   IFS='|' read -r kind d name <<<"$spec"
@@ -223,6 +248,8 @@ for spec in "${stack_specs[@]}"; do
     FAILED=1
   fi
 done
+
+fi  # REMOVE_AWS
 
 if [ "$FAILED" = 1 ]; then
   warn "uninstall finished with errors — local state was left in place so cleanup can be retried after fixing AWS access."

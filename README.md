@@ -86,9 +86,11 @@ before `hellbox deploy`; the binary reads the standard AWS credential chain. Use
 Chrome or Edge for the low-latency H.264 path — other browsers can fall back with
 `hellbox config set display vnc`.
 
-**To remove everything**, run `./uninstall.ps1` (the Windows parallel to `uninstall.sh`): it
-tears down the MicroVM, image, bucket, and stack via `hellbox destroy`, then deletes
-`~/.hellbox` and drops it from your PATH.
+**To uninstall**, run `./uninstall.ps1` (the Windows parallel to `uninstall.sh`): it removes
+`~/.hellbox` and drops it from your PATH, and then *asks* whether to also tear down your AWS
+resources (the MicroVM, image, bucket, and stack). Removing the CLI never deletes anything in
+AWS without your confirmation; answer no (the default) to keep your deployment, or set
+`HELLBOX_YES=1` to confirm teardown non-interactively.
 
 </details>
 

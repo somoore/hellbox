@@ -24,6 +24,12 @@ use clap::{Parser, Subcommand};
     after_help = "Running `hellbox` with no command is the same as `hellbox play`."
 )]
 struct Cli {
+    /// AWS profile to use, like `aws --profile`. Sets AWS_PROFILE for this run,
+    /// so `hellbox --profile X deploy` works the same as `export AWS_PROFILE=X`.
+    /// Without it, hellbox reads the standard AWS chain (AWS_PROFILE, env creds,
+    /// SSO, credential_process).
+    #[arg(long, global = true)]
+    profile: Option<String>,
     #[command(subcommand)]
     cmd: Option<Cmd>,
 }
@@ -151,6 +157,17 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
+    // A --profile flag just sets AWS_PROFILE for this process; the SDK's default
+    // chain (which every command resolves through) reads it from there. This is
+    // the whole implementation: one env var, and SSO / credential_process / env
+    // creds all keep working exactly as they do for the aws CLI.
+    if let Some(profile) = cli.profile.as_deref().filter(|p| !p.trim().is_empty()) {
+        // SAFETY: single-threaded startup, before any AWS client or async task
+        // reads the environment.
+        unsafe {
+            std::env::set_var("AWS_PROFILE", profile);
+        }
+    }
     match cli.cmd.unwrap_or(Cmd::Play {
         name: "doom".to_string(),
     }) {

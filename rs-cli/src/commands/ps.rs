@@ -27,7 +27,8 @@ pub async fn run(refresh: bool) -> Result<()> {
 /// suspended (or terminated) while hellbox wasn't running shows up here.
 async fn reconcile(state: &mut State) -> Result<()> {
     let cfg = Config::load()?;
-    let (sdk, identity) = crate::aws::resolve(&cfg.region).await?;
+    let (sdk, identity) =
+        crate::aws::resolve_with_profile(&cfg.region, cfg.aws_profile.as_deref()).await?;
     let aws = Aws::from_sdk_config(&sdk);
     let live = aws
         .microvm

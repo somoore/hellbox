@@ -24,7 +24,8 @@ pub async fn run_with_verify(name: &str, strict: bool) -> Result<()> {
     let mut state = State::load()?;
 
     // Friendly credential check + wrong-account guard before touching anything.
-    let (sdk, identity) = crate::aws::resolve(&cfg.region).await?;
+    let (sdk, identity) =
+        crate::aws::resolve_with_profile(&cfg.region, cfg.aws_profile.as_deref()).await?;
     crate::aws::require_same_account(&cfg, &identity)?;
     let aws = Aws::from_sdk_config(&sdk);
 

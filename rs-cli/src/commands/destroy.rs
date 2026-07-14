@@ -26,7 +26,8 @@ pub async fn run(name: &str, yes: bool) -> Result<()> {
 
     // Credentials must work AND point at the account this config was written
     // for; destroying "Hellbox" in some other account would be someone else's.
-    let (sdk, identity) = crate::aws::resolve(&cfg.region).await?;
+    let (sdk, identity) =
+        crate::aws::resolve_with_profile(&cfg.region, cfg.aws_profile.as_deref()).await?;
     crate::aws::require_same_account(&cfg, &identity)?;
     let aws = Aws::from_sdk_config(&sdk);
     let capsule = state.get(name).cloned();

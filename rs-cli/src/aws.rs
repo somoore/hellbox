@@ -57,6 +57,17 @@ pub struct Identity {
 /// `assume <profile>` + `hellbox` "just work" like `aws`, with no AWS-CLI
 /// shell-out and no dependency on the login-session cache.
 pub async fn resolve(region: &str) -> Result<(aws_config::SdkConfig, Identity)> {
+    resolve_with_profile(region, None).await
+}
+
+/// Like `resolve`, but falls back to a stored config profile when no `--profile`
+/// flag or `AWS_PROFILE` selected one. `deploy` passes None (no config yet);
+/// `play`/`destroy`/`ps` pass the profile deploy recorded.
+pub async fn resolve_with_profile(
+    region: &str,
+    stored_profile: Option<&str>,
+) -> Result<(aws_config::SdkConfig, Identity)> {
+    apply_stored_profile(stored_profile);
     let sdk = sdk_config(region).await;
     let err = match identity_of(&sdk).await {
         Ok(id) => return Ok((sdk, id)),
@@ -92,6 +103,22 @@ pub async fn resolve(region: &str) -> Result<(aws_config::SdkConfig, Identity)> 
              <name> --format env`, set them, and clear AWS_PROFILE\n  \
              - remove the `login_session` line from the profile in ~/.aws/config"
         );
+    }
+
+    // SSO rescue: if the selected profile is an IAM Identity Center / SSO
+    // profile, the failure is almost always a stale or absent SSO token, which
+    // only `aws sso login` can refresh (the SDK can read the token cache but
+    // can't mint one). Offer to run it, then retry once. This is the one-command
+    // SSO flow: `hellbox --profile X deploy` signs you in and proceeds.
+    if let Some(profile) = active_profile_name()
+        && profile_is_sso(&profile)
+        && sso_login(&profile)?
+    {
+        let sdk = sdk_config(region).await;
+        if let Ok(id) = identity_of(&sdk).await {
+            return Ok((sdk, id));
+        }
+        tracing::debug!(target: "hellbox::aws", "credentials still not resolving after aws sso login");
     }
 
     tracing::debug!(target: "hellbox::aws", "sts get-caller-identity failed: {err}");
@@ -175,13 +202,101 @@ impl ProvideCredentials for CredentialProcessProvider {
 /// for profile selection, and honoring it could inject a different account's
 /// credentials than the SDK would ever have used.)
 fn active_credential_process() -> Option<String> {
-    let profile = std::env::var("AWS_PROFILE")
-        .ok()
-        .filter(|p| !p.trim().is_empty())
-        .unwrap_or_else(|| "default".to_string());
+    let profile = active_profile_name()?;
     let cmd = credential_process_command(&profile)?;
     tracing::debug!(target: "hellbox::aws", "using credential_process for profile '{profile}'");
     Some(cmd)
+}
+
+/// The profile the SDK will select: `AWS_PROFILE` if set, else `default`. Main
+/// sets `AWS_PROFILE` from a `--profile` flag, and the caller resolves the
+/// stored config profile into it too, so this reflects the effective choice.
+/// Returns None only when AWS_PROFILE is explicitly empty (nothing to act on).
+fn active_profile_name() -> Option<String> {
+    Some(
+        std::env::var("AWS_PROFILE")
+            .ok()
+            .filter(|p| !p.trim().is_empty())
+            .unwrap_or_else(|| "default".to_string()),
+    )
+}
+
+/// True if `profile` is an IAM Identity Center / SSO profile: it names an
+/// `sso_session` or carries the inline `sso_start_url` (both AWS SSO shapes).
+fn profile_is_sso(profile: &str) -> bool {
+    keys_are_sso(&profile_keys(profile))
+}
+
+/// Read the key=value pairs under `[profile NAME]` (or `[default]`) from the
+/// AWS config file. Same section-scan the credential_process reader uses.
+fn profile_keys(profile: &str) -> Vec<(String, String)> {
+    match std::fs::read_to_string(aws_config_file()) {
+        Ok(text) => parse_profile_keys(&text, profile),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Pure parser: key=value pairs under `[profile NAME]` (or `[default]`) in AWS
+/// config text. Split out from file IO so it is directly testable.
+fn parse_profile_keys(text: &str, profile: &str) -> Vec<(String, String)> {
+    let target = if profile == "default" {
+        "default".to_string()
+    } else {
+        format!("profile {profile}")
+    };
+    let mut in_target = false;
+    let mut out = Vec::new();
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            in_target = name.trim() == target;
+        } else if in_target && let Some((k, v)) = line.split_once('=') {
+            out.push((k.trim().to_string(), v.trim().to_string()));
+        }
+    }
+    out
+}
+
+/// True if these parsed profile keys describe an SSO profile.
+fn keys_are_sso(keys: &[(String, String)]) -> bool {
+    keys.iter()
+        .any(|(k, _)| k == "sso_session" || k == "sso_start_url")
+}
+
+/// Prompt, then run `aws sso login --profile <name>` (opens a browser). Returns
+/// Ok(true) if login ran, Ok(false) if the user declined. The prompt is the
+/// off-switch: hellbox never launches the browser without a yes.
+fn sso_login(profile: &str) -> Result<bool> {
+    use std::io::Write;
+    eprint!("SSO session for profile '{profile}' is missing or expired. Sign in now? [Y/n] ");
+    std::io::stderr().flush().ok();
+
+    let mut answer = String::new();
+    // A non-interactive stdin (piped, CI) reads empty; treat that as "no" so we
+    // never hang waiting on input that will not come.
+    if std::io::stdin().read_line(&mut answer).unwrap_or(0) == 0 {
+        eprintln!("(no terminal input; skipping sign-in)");
+        return Ok(false);
+    }
+    let answer = answer.trim().to_lowercase();
+    if !(answer.is_empty() || answer == "y" || answer == "yes") {
+        return Ok(false);
+    }
+
+    eprintln!("Opening browser to sign in to '{profile}'...");
+    let status = std::process::Command::new("aws")
+        .args(["sso", "login", "--profile", profile])
+        .status();
+    match status {
+        Ok(s) if s.success() => Ok(true),
+        Ok(s) => anyhow::bail!("`aws sso login --profile {profile}` exited with {s}"),
+        Err(e) => anyhow::bail!(
+            "could not run `aws sso login` (is the AWS CLI installed and on PATH?): {e}"
+        ),
+    }
 }
 
 /// The AWS config file: `AWS_CONFIG_FILE` if set, else `~/.aws/config`.
@@ -314,6 +429,26 @@ pub fn require_same_account(cfg: &Config, identity: &Identity) -> Result<()> {
     Ok(())
 }
 
+/// Profile precedence: an explicit `--profile` flag or `AWS_PROFILE` already in
+/// the environment wins; otherwise fall back to the profile `hellbox deploy`
+/// recorded in config, so a bare `hellbox play`/`deploy` remembers it. Sets
+/// `AWS_PROFILE` so the whole credential chain (and the SSO rescue) sees it.
+pub fn apply_stored_profile(stored: Option<&str>) {
+    let already_set = std::env::var("AWS_PROFILE")
+        .ok()
+        .is_some_and(|p| !p.trim().is_empty());
+    if already_set {
+        return;
+    }
+    if let Some(profile) = stored.map(str::trim).filter(|p| !p.is_empty()) {
+        // SAFETY: single-threaded startup path, before any AWS client reads env.
+        unsafe {
+            std::env::set_var("AWS_PROFILE", profile);
+        }
+        tracing::debug!(target: "hellbox::aws", "using stored profile '{profile}' from config");
+    }
+}
+
 impl Aws {
     /// Build the AWS clients, first checking that credentials actually work (and
     /// applying the login_session/credential_process rescue in `resolve`) so
@@ -321,7 +456,8 @@ impl Aws {
     /// (`play`/`deploy`/`destroy` call `resolve` directly because they also need
     /// the returned `Identity`.)
     pub async fn new(cfg: &Config) -> Result<Self> {
-        let (sdk, _identity) = resolve(&cfg.region).await?;
+        let (sdk, _identity) =
+            resolve_with_profile(&cfg.region, cfg.aws_profile.as_deref()).await?;
         Ok(Self::from_sdk_config(&sdk))
     }
 
@@ -331,5 +467,49 @@ impl Aws {
             s3: aws_sdk_s3::Client::new(sdk_config),
             cloudformation: aws_sdk_cloudformation::Client::new(sdk_config),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CONFIG: &str = "\
+[default]
+region = us-east-1
+
+[profile sso-modern]
+sso_session = production
+sso_account_id = 932930471665
+sso_role_name = AdministratorAccess
+
+[profile sso-legacy]
+sso_start_url = https://example.awsapps.com/start
+sso_account_id = 111122223333
+
+[profile static-keys]
+region = us-west-2
+";
+
+    #[test]
+    fn detects_sso_profiles_both_shapes() {
+        // Modern (sso_session) and legacy (sso_start_url) both count as SSO.
+        assert!(keys_are_sso(&parse_profile_keys(CONFIG, "sso-modern")));
+        assert!(keys_are_sso(&parse_profile_keys(CONFIG, "sso-legacy")));
+        // A plain profile and an unknown name are not SSO.
+        assert!(!keys_are_sso(&parse_profile_keys(CONFIG, "static-keys")));
+        assert!(!keys_are_sso(&parse_profile_keys(CONFIG, "does-not-exist")));
+        assert!(!keys_are_sso(&parse_profile_keys(CONFIG, "default")));
+    }
+
+    #[test]
+    fn parses_only_the_targeted_section() {
+        let keys = parse_profile_keys(CONFIG, "sso-modern");
+        assert!(
+            keys.iter()
+                .any(|(k, v)| k == "sso_session" && v == "production")
+        );
+        // Keys from other sections must not leak in.
+        assert!(!keys.iter().any(|(k, _)| k == "sso_start_url"));
     }
 }

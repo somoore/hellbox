@@ -76,7 +76,7 @@ Lambda MicroVMs are opinionated. Each constraint below shaped the design.
 | **ARM64 only** | DOOM is a native aarch64 build (Chocolate Doom), so it runs directly on the ARM CPU with no translation layer and renders reliably across the fleet. macOS is out of scope. |
 | **No SDL2 in Amazon Linux 2023** (no EPEL) | The SDL stack (SDL2, SDL2_mixer, SDL2_net) and Chocolate Doom are compiled once in CI inside the exact base image and shipped as a hash-pinned, attestation-signed tarball the Dockerfile downloads. That cut the cloud image build from about 6.5 minutes to about 4.5. |
 | **HTTPS and WSS ingress only** (no raw TCP) | Everything is tunnelled over WebSockets: H.264 video, Opus audio, and a JSON input channel, plus a noVNC fallback. |
-| **Auth is the `X-aws-proxy-auth` header** | The token has to be in the header; the same token in a query string returns 403. Browsers cannot set the header, so I run a loopback proxy (section 5). |
+| **Auth is the `X-aws-proxy-auth` header** | The token has to be in the header (the same token in a query string returns 403). A browser can't set it on a navigation, and the WebSocket-subprotocol path AWS documents would leak the token into page JS, so I run a loopback proxy that keeps the token server-side (section 5). |
 | **Lifecycle hooks are ENABLED/DISABLED toggles** | Hooks are switches, not script paths: `microvmImageHooks.ready`, `microvmHooks.run` and `resume`, plus `*TimeoutInSeconds` and `hooks.port`. I send `readyTimeoutInSeconds=600`. |
 | **The ready hook has to be on port 9000** | AWS POSTs its readiness probe to `http://127.0.0.1:9000/aws/lambda-microvms/runtime/v1/ready`. Any other port fails the build with "Ready hook invocation timed out". |
 | **Snapshot based** | DOOM has to be drawn at snapshot time (the ready render gate, section 4), or every run and resume restores a blank screen. Suspend and resume is a live memory snapshot. |
@@ -222,10 +222,13 @@ window so input reaches DOOM.
 
 The MicroVM endpoint authenticates with a token (a JWE) in the `X-aws-proxy-auth` header and
 selects the target port with `X-aws-proxy-port`. The same token in a query string returns
-403, and browsers cannot set headers on a navigation or a `WebSocket`, so a tab cannot
-authenticate to the endpoint on its own. So `hellbox open` runs a loopback reverse-proxy on
-`127.0.0.1:6080`: the browser talks plain HTTP and WebSocket to loopback, and the proxy
-injects the headers and forwards over TLS. The token lives only in the proxy.
+403, and a browser cannot set that header on a navigation. AWS does document a browser-native
+way to auth the WebSocket streams, passing the token as a `lambda-microvms.authentication.<token>`
+subprotocol, but that puts a live, port-scoped credential inside page JavaScript, where any
+script, extension, or XSS on the tab can read it. So `hellbox open` runs a loopback
+reverse-proxy on `127.0.0.1:6080`: the browser talks plain HTTP and WebSocket to loopback,
+and the proxy injects the headers and forwards over TLS. The token lives only in the proxy
+and never reaches the browser. Keeping the credential out of the tab is the point.
 
 The proxy (`rs-cli/src/proxy.rs`, on `hyper` 1.x) handles a request one of three ways:
 

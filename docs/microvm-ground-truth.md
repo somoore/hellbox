@@ -49,9 +49,13 @@ the AWS docs for anything not listed here.
 - **Wake on traffic:** any data-plane request to a SUSPENDED MicroVM auto-resumes it. To
   keep a suspended MicroVM paused, poll state via the control plane (`GetMicrovm` does not
   resume), not by hitting the endpoint.
-- **Suspended duration:** configure `IdlePolicy.suspendedDurationSeconds` at 8 hours or
-  less. The live API may accept larger values, but AWS public copy describes suspended
-  state as preserved "for up to 8 hours", so Hellbox follows that public contract.
+- **Duration is a total budget, not fresh-from-suspend:** `maximumDurationInSeconds`
+  (max 28800 = 8h) caps the MicroVM's *combined* time in the running AND suspended states
+  before Lambda terminates it. That 8h is the real ceiling. `IdlePolicy.suspendedDurationSeconds`
+  (min 0, no documented max) separately caps time spent suspended before termination, but
+  it can never exceed the total-lifetime budget: play 3h, and at most ~5h of suspend remains.
+  Hellbox sets both to 8h, so `maximumDurationInSeconds` is the effective limit. Do not tell
+  users "come back next week"; frame-perfect resume only survives inside the 8h total window.
 
 ## Lifecycle hooks (the #1 build-failure source)
 

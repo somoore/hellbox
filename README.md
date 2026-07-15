@@ -31,6 +31,14 @@ in your own AWS account, streamed to your browser. You can freeze the whole mach
 memory and all, then thaw it later. It is not a product. It exists to make Firecracker
 MicroVMs feel real instead of abstract.
 
+> [!NOTE]
+> **The demon lives in the cloud, not on your laptop.** Hellbox runs DOOM inside an AWS
+> Lambda MicroVM in *your* AWS account and streams it to a browser tab. It needs AWS
+> credentials and it costs real (small) money to run. If you just want to shoot imps
+> locally, [Chocolate Doom](https://www.chocolate-doom.org/) is one `brew install` away and
+> this is the wrong repo. If you want to see what AWS Lambda MicroVMs can actually do,
+> including suspend a live machine and resume it on the exact frame, you are in the right place.
+
 ## Quickstart
 
 You need AWS credentials configured (the AWS CLI, SSO, or environment variables). Then:
@@ -108,15 +116,15 @@ In the tab: click the speaker icon for sound, click the game, and play. `W A S D
 `Ctrl` to fire, `Space` to open doors. The **Suspend** button freezes the MicroVM and stops
 compute billing. **Resume** puts you back on the exact frame.
 
-Coming back later, whether that's an hour or a week? One word:
+Coming back later the same day? One word:
 
 ```bash
 hellbox    # same as `hellbox play`: reconnect, resume, or relaunch, then open the tab
 ```
 
-Suspended machines only persist for about 8 hours before AWS terminates them, so after a
-few days away your machine is usually gone. `hellbox` figures that out and relaunches from
-your image. Takes about 15 seconds.
+A MicroVM lives at most 8 hours total (running and suspended combined) before AWS
+terminates it, so a suspended machine you left this morning is usually gone by evening.
+`hellbox` figures that out and relaunches from your image. Takes about 15 seconds.
 
 </details>
 
@@ -148,7 +156,7 @@ second (it can burst above the baseline under load), plus data transfer. The str
 roughly 0.5 to 1 GB/hour, and AWS gives you 100 GB/month of free egress before $0.09/GB
 kicks in. A suspend/resume cycle costs about a penny. A suspended machine only pays
 snapshot storage ($0.08/GB-month, so around 16 cents/month prorated), and AWS terminates
-it after about 8 hours anyway. The stored image also pays snapshot storage while you keep
+it once its 8-hour total lifetime is up anyway. The stored image also pays snapshot storage while you keep
 it, likely a few tens of cents per month. The MicroVM auto-suspends after about 5 idle
 minutes and wakes on traffic, so walking away is cheap. Done for good? `hellbox destroy`
 ends all of it.
@@ -175,11 +183,14 @@ One Rust binary with two jobs:
 - **Lifecycle driver.** Builds the MicroVM image, launches, suspends, resumes, and destroys
   it. These are SigV4 calls to the AWS control plane with your credentials.
 - **The stream proxy.** The MicroVM's HTTPS endpoint wants an auth token in the
-  `X-aws-proxy-auth` header, and browsers cannot set headers on navigations or WebSockets.
+  `X-aws-proxy-auth` header. A browser can't set that header on a page navigation, and the
+  one browser-native path AWS documents for the WebSocket streams (passing the token as a
+  `lambda-microvms.authentication.<token>` subprotocol) would put a live, port-scoped
+  credential inside page JavaScript, reachable by any script, extension, or XSS on the tab.
   So `hellbox open` mints a short-lived, port-scoped token and runs a loopback proxy on
-  `127.0.0.1:6080` that injects it into every request. The token never reaches the browser.
-  This is why a local binary exists at all: without the proxy, no browser could reach your
-  MicroVM.
+  `127.0.0.1:6080` that injects it into every request. The token stays in the local binary
+  and never reaches the browser, which only ever talks to `127.0.0.1`. That is the reason a
+  local binary exists: it keeps the credential out of the browser.
 
 Get it however you like. Every channel traces back to the same attestation-verified GitHub
 release builds:

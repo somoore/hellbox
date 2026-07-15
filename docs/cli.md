@@ -36,7 +36,7 @@ hellbox play                    # get DOOM on screen, whatever it takes
 This is the "I just want to play" command. It checks what AWS actually has and recovers
 from wherever things stand. A RUNNING capsule opens immediately. A SUSPENDED one opens the
 paused page, and clicking **Resume** is your deliberate restart of billing. A terminated or
-expired one (suspended MicroVMs only persist about 8 hours) gets relaunched from the image.
+expired one (a MicroVM lives at most 8 hours total, running and suspended combined) gets relaunched from the image.
 No image at all points you to `hellbox deploy`. Every path ends with the proxy verified and
 a tab open.
 

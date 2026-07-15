@@ -8,8 +8,15 @@ use crate::config::Config;
 use crate::lifecycle::await_running;
 use crate::state::State;
 
+// AWS caps a MicroVM's TOTAL lifetime (running + suspended, combined) at
+// maximum_duration_in_seconds, max 28800s (8h). This is the real ceiling: play
+// for 3h and only ~5h of suspend remains, so frame-perfect resume only survives
+// inside this 8h total window, never a fresh 8h from the moment you suspend.
 const MAX_DURATION_SECS: i32 = 8 * 60 * 60;
 const MAX_IDLE_SECS: i32 = 5 * 60;
+// suspended_duration_seconds caps how long a MicroVM may sit suspended before
+// termination. We ask for the full 8h, but MAX_DURATION_SECS bounds it: the
+// total-lifetime cap always wins, so this never grants suspend time beyond it.
 const SUSPENDED_DURATION_SECS: i32 = 8 * 60 * 60;
 
 pub async fn run(name: &str) -> Result<()> {

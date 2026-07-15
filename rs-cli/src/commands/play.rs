@@ -3,9 +3,9 @@
 //! Reconciles local state with AWS and does whatever is needed to get a tab
 //! open: RUNNING opens straight away, SUSPENDED opens the paused page (the
 //! Resume click is the user's deliberate restart of billing), a terminated or
-//! missing MicroVM is relaunched from the image (suspended machines only
-//! persist ~8h, so a returning user usually lands here), and no image at all
-//! points to `hellbox deploy`.
+//! missing MicroVM is relaunched from the image (a MicroVM lives at most 8h
+//! total before AWS terminates it, so a returning user usually lands here), and
+//! no image at all points to `hellbox deploy`.
 
 use anyhow::{Context, Result, bail};
 
@@ -103,12 +103,32 @@ pub async fn run_with_verify(name: &str, strict: bool) -> Result<()> {
             if capsule.image_arn.is_none() && capsule.image_version.is_none() {
                 bail!("capsule '{name}' has no image — run `hellbox deploy`");
             }
+            // The image ARN may still be recorded locally while the image itself
+            // has no launchable active version (its version aged out or was
+            // deleted alongside the MicroVM). Launching that would die with a raw
+            // `No active version found` error, so check first and offer a rebuild
+            // instead of dumping a stack trace.
+            if !super::deploy::existing_image_active(&sdk, name).await {
+                // A hollow image (no launchable version), or drift deeper than
+                // that (missing bucket/stack). `deploy` reconciles every layer
+                // and ends by launching and opening the tab, so we return here
+                // rather than fall through to our own open below. Only from a
+                // plain `play`: `deploy` guarantees an active image before it
+                // calls play(strict), so this branch can't recurse into deploy.
+                if strict {
+                    bail!(
+                        "the '{name}' image has no launchable version after deploy built it; \
+                         this is unexpected, try `hellbox rm --name {name}` then `hellbox deploy`"
+                    );
+                }
+                return offer_rebuild(name).await;
+            }
             if capsule.microvm_id.is_some() {
                 println!(
-                    "==> '{name}' is not running (suspended MicroVMs only persist ~8h) — relaunching"
+                    "==> '{name}' is not running (a MicroVM lives at most 8h total before AWS terminates it), relaunching"
                 );
             } else {
-                println!("==> '{name}' has no running machine — launching");
+                println!("==> '{name}' has no running machine, launching");
             }
             state.upsert(name, |c| {
                 c.microvm_id = None;
@@ -119,4 +139,23 @@ pub async fn run_with_verify(name: &str, strict: bool) -> Result<()> {
     }
 
     super::open::run_with_verify(name, false, strict).await
+}
+
+/// The recorded image has no launchable active version (hollow), so a plain
+/// relaunch would die with a raw `No active version found`. Offer a rebuild via
+/// `deploy`, which reconciles the whole stack (not just the image, so it also
+/// heals a missing bucket or stack) and then launches and opens the tab. A
+/// rebuild is a ~5-minute, resource-creating action, so we never do it silently:
+/// a non-interactive shell falls through to the command hint instead.
+async fn offer_rebuild(name: &str) -> Result<()> {
+    println!("==> The '{name}' image has no launchable version (it needs rebuilding).");
+    let answer = crate::discover::ask("Rebuild it now? This takes about 5 minutes. [y/N]:", 'n');
+    if answer != 'y' {
+        bail!("run `hellbox deploy` to rebuild the '{name}' image, then try again");
+    }
+    // Box the call: deploy -> play -> offer_rebuild -> deploy is a type-level
+    // cycle. It cannot loop at runtime (deploy guarantees an active image before
+    // calling play(strict), and offer_rebuild is unreachable under strict), but
+    // the async fn still needs boxing to have a finite size.
+    Box::pin(super::deploy::run(name, None, &[])).await
 }

@@ -320,8 +320,10 @@ async fn reconcile_state(
 }
 
 /// True when local state records an image for this capsule and the service
-/// reports it CREATED with an active version.
-async fn existing_image_active(sdk: &aws_config::SdkConfig, name: &str) -> bool {
+/// reports it CREATED with an active version. `play` reuses this to avoid
+/// launching a hollow image (one whose active version aged out or was deleted),
+/// which otherwise dies with a raw `No active version found` error.
+pub(crate) async fn existing_image_active(sdk: &aws_config::SdkConfig, name: &str) -> bool {
     let Some(arn) = crate::state::State::load()
         .ok()
         .and_then(|s| s.get(name).and_then(|c| c.image_arn.clone()))

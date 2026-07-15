@@ -32,12 +32,11 @@ memory and all, then thaw it later. It is not a product. It exists to make Firec
 MicroVMs feel real instead of abstract.
 
 > [!NOTE]
-> **The demon lives in the cloud, not on your laptop.** Hellbox runs DOOM inside an AWS
-> Lambda MicroVM in *your* AWS account and streams it to a browser tab. It needs AWS
-> credentials and it costs real (small) money to run. If you just want to shoot imps
-> locally, [Chocolate Doom](https://www.chocolate-doom.org/) is one `brew install` away and
-> this is the wrong repo. If you want to see what AWS Lambda MicroVMs can actually do,
-> including suspend a live machine and resume it on the exact frame, you are in the right place.
+> **The demon lives in the cloud, not on your laptop.** This is not a local DOOM build.
+> Running it means spinning up billable AWS resources in your own account, so you need AWS
+> credentials and it costs real (small) money. Want to shoot imps offline for free?
+> [Chocolate Doom](https://www.chocolate-doom.org/) is one `brew install` away, and this is
+> the wrong repo.
 
 ## Quickstart
 

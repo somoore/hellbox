@@ -3,8 +3,9 @@
 #
 #   ./deploy.sh
 #
-# Env: AWS_REGION, HELLBOX_STACK, HELLBOX_NAME, HELLBOX_REPO,
-# HELLBOX_VERSION, HELLBOX_SKIP_ATTESTATION=1, HELLBOX_BIN.
+# Env: AWS_REGION, HELLBOX_STACK, HELLBOX_NAME, HELLBOX_REPO, HELLBOX_VERSION,
+# HELLBOX_BIN. HELLBOX_SKIP_ATTESTATION=1 disables the provenance trust anchor
+# and additionally requires a pinned HELLBOX_VERSION and HELLBOX_I_UNDERSTAND_THE_RISK=1.
 set -euo pipefail
 
 STACK="${HELLBOX_STACK:-Hellbox}"
@@ -67,7 +68,16 @@ verify_attestation(){
   if [ "${HELLBOX_SKIP_ATTESTATION:-0}" = "1" ]; then
     [ "$VERSION" != "latest" ] \
       || die "HELLBOX_SKIP_ATTESTATION=1 requires a pinned HELLBOX_VERSION, not latest"
-    warn "skipping GitHub artifact attestation verification for pinned release $VERSION"
+    # This is the cryptographic trust anchor being turned off. Do not let it be
+    # flipped by a stray env var: require the caller to also acknowledge the risk
+    # explicitly, so a copy-pasted "HELLBOX_SKIP_ATTESTATION=1" alone can't
+    # silently downgrade trust to the swappable .sha256 sidecar.
+    [ "${HELLBOX_I_UNDERSTAND_THE_RISK:-0}" = "1" ] || die \
+      "HELLBOX_SKIP_ATTESTATION=1 disables the build-provenance trust anchor, leaving \
+only the .sha256 sidecar (which an asset-swapping attacker can also swap). \
+The trustless path is to build from source and pass HELLBOX_BIN instead. \
+If you truly mean to skip verification, re-run with HELLBOX_I_UNDERSTAND_THE_RISK=1."
+    warn "SECURITY: attestation verification DISABLED for $VERSION. Integrity rests on the .sha256 sidecar alone, which is not tamper-evident. Prefer HELLBOX_BIN (build from source)."
     return
   fi
   command -v gh >/dev/null 2>&1 \

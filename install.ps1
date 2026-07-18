@@ -20,8 +20,10 @@
     HELLBOX_REPO              default somoore/hellbox
     HELLBOX_VERSION           default latest, or a pinned tag like v1.0.17
     HELLBOX_HOME              default $env:USERPROFILE\.hellbox
-    HELLBOX_SKIP_ATTESTATION  set to 1 to skip the attestation check
-                              (requires a pinned HELLBOX_VERSION, never latest)
+    HELLBOX_SKIP_ATTESTATION  set to 1 to skip the attestation check (requires a
+                              pinned HELLBOX_VERSION, never latest, AND
+                              HELLBOX_I_UNDERSTAND_THE_RISK=1). Prefer building
+                              from source over skipping verification.
 
 .EXAMPLE
   ./install.ps1
@@ -95,13 +97,24 @@ function Test-Attestation($file, $releaseTag) {
     if ($Version -eq 'latest') {
       Die 'HELLBOX_SKIP_ATTESTATION=1 requires a pinned HELLBOX_VERSION, not latest'
     }
-    Warn "skipping GitHub artifact attestation verification for pinned release $Version"
+    # Turning off the build-provenance trust anchor must be deliberate, not a
+    # stray env var: require an explicit risk acknowledgement so a copy-pasted
+    # HELLBOX_SKIP_ATTESTATION=1 alone cannot silently downgrade trust to the
+    # swappable .sha256 sidecar.
+    if ($env:HELLBOX_I_UNDERSTAND_THE_RISK -ne '1') {
+      Die ("HELLBOX_SKIP_ATTESTATION=1 disables the build-provenance trust anchor, leaving`n" +
+           "  only the .sha256 sidecar, which an asset-swapping attacker can also swap.`n" +
+           "  The trustless path is to build from source and set HELLBOX_BIN instead.`n" +
+           "  To skip verification anyway, also set HELLBOX_I_UNDERSTAND_THE_RISK=1.")
+    }
+    Warn "SECURITY: attestation verification DISABLED for $Version. Integrity rests on the .sha256 sidecar alone, which is not tamper-evident. Prefer building from source (HELLBOX_BIN)."
     return $true
   }
   if (-not (Have gh)) {
     Die ("gh (GitHub CLI) is required to verify the build attestation for $asset.`n" +
-         "  Install it with 'winget install GitHub.cli', build from source, or set`n" +
-         "  HELLBOX_SKIP_ATTESTATION=1 with a pinned HELLBOX_VERSION to bypass.")
+         "  Install it with 'winget install GitHub.cli', or build from source. As a`n" +
+         "  last resort, set HELLBOX_SKIP_ATTESTATION=1 with a pinned HELLBOX_VERSION`n" +
+         "  and HELLBOX_I_UNDERSTAND_THE_RISK=1 (this disables the trust anchor).")
   }
   # --source-ref binds the check to this exact tag, so an older artifact from the
   # same workflow (or a swapped asset+sidecar) fails rather than passing.

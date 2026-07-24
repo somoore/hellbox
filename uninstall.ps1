@@ -57,13 +57,13 @@ $Name       = if ($env:HELLBOX_NAME) { $env:HELLBOX_NAME } elseif ($env:LAMBDADO
 $configPath = Join-Path $HomeDir 'config.toml'
 $failed     = $false
 
-# Resolve the CLI from explicit overrides, cache, PATH, then a local build.
+# Resolve a current hellbox CLI from its explicit override, cache, PATH, then a
+# local build. Legacy ldoom binaries do not implement `destroy`; accepting one
+# here would make teardown fail after the user already confirmed it.
 $exe = $null
 $pathHellbox = Get-Command hellbox.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-$pathLegacy = Get-Command ldoom.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-foreach ($c in @($env:HELLBOX_BIN, $env:LDOOM_BIN, $env:LAMBDADOOM_BIN,
-                 (Join-Path $BinDir 'hellbox.exe'), (Join-Path $BinDir 'ldoom.exe'),
-                 $pathHellbox.Source, $pathLegacy.Source,
+foreach ($c in @($env:HELLBOX_BIN, (Join-Path $BinDir 'hellbox.exe'),
+                 $pathHellbox.Source,
                  (Join-Path $PSScriptRoot 'rs-cli\target\release\hellbox.exe'))) {
   if ($c -and (Test-Path $c -PathType Leaf)) { $exe = $c; break }
 }
@@ -162,6 +162,7 @@ if (Test-Path $configPath) {
 if ($removeAws -and $exe -and (Test-Path $configPath)) {
   Info "Tearing down AWS resources: $exe destroy --name $Name --yes"
   $env:HELLBOX_HOME = $HomeDir
+  $env:HELLBOX_STACK = $Stack
   & $exe destroy --name $Name --yes
   if ($LASTEXITCODE -ne 0) { Warn "hellbox destroy failed (exit $LASTEXITCODE)"; $failed = $true }
 }

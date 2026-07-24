@@ -156,22 +156,23 @@ $sum = Join-Path $BinDir 'hellbox.exe.sha256'
 
 $needDownload = $true
 if ((Test-Path $exe) -and (Test-Path $sum)) {
+  if ($SkipAtt) {
+    # A local checksum sidecar is not a trust anchor: an attacker who replaced
+    # the cached executable can replace it too. With attestations disabled,
+    # never execute or reuse cache contents; fetch the explicitly pinned release.
+    Warn "attestation is disabled, so cached executables are never reused - re-downloading $tag"
+  } else {
   # Re-verify the cache BEFORE trusting or running it. SHA256 first (integrity),
-  # then attestation (provenance). A normal attestation is bound to $tag, so a
-  # pass also proves the cache is *this* release. But when HELLBOX_SKIP_ATTESTATION
-  # is set, Test-Attestation is a no-op, so nothing ties the cache to $tag --
-  # confirm the version explicitly (only after SHA256 passed, so we're not running
-  # an unverified binary). An older or tampered cache falls through to a fresh download.
+  # then attestation (provenance). The attestation is bound to $tag, so a pass
+  # also proves the cache is this release. An older or tampered cache falls
+  # through to a fresh download without being executed.
   $cacheOk = (Test-Sha256 $exe $sum) -and (Test-Attestation $exe $tag)
-  if ($cacheOk -and $SkipAtt) {
-    $cachedVer = try { (& $exe --version 2>$null).Split()[1] } catch { $null }
-    if ($cachedVer -ne $tag.TrimStart('v')) { $cacheOk = $false }
-  }
   if ($cacheOk) {
     Info "hellbox $tag already installed and verified at $exe"
     $needDownload = $false
   } else {
     Warn "cached hellbox failed verification or is a different release - re-downloading"
+  }
   }
 }
 

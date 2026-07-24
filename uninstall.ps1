@@ -41,15 +41,29 @@ function Info($m) { Write-Host "==> $m" -ForegroundColor Cyan }
 function Warn($m) { Write-Host "warning: $m" -ForegroundColor Yellow }
 function Have($n) { [bool](Get-Command $n -ErrorAction SilentlyContinue) }
 
-$HomeDir    = if ($env:HELLBOX_HOME)  { $env:HELLBOX_HOME }  else { Join-Path $env:USERPROFILE '.hellbox' }
+$newHome    = Join-Path $env:USERPROFILE '.hellbox'
+$legacyHome = if ($env:LAMBDADOOM_HOME) { $env:LAMBDADOOM_HOME } else { Join-Path $env:USERPROFILE '.lambdadoom' }
+$HomeDir    = if ($env:HELLBOX_HOME) {
+  $env:HELLBOX_HOME
+} elseif ((-not (Test-Path (Join-Path $newHome 'config.toml'))) -and (Test-Path (Join-Path $legacyHome 'config.toml'))) {
+  $legacyHome
+} else {
+  $newHome
+}
+$isLegacy   = ($HomeDir -ieq $legacyHome)
 $BinDir     = Join-Path $HomeDir 'bin'
-$Stack      = if ($env:HELLBOX_STACK) { $env:HELLBOX_STACK } else { 'Hellbox' }
+$Stack      = if ($env:HELLBOX_STACK) { $env:HELLBOX_STACK } elseif ($isLegacy) { 'LambdaDoom' } else { 'Hellbox' }
+$Name       = if ($env:HELLBOX_NAME) { $env:HELLBOX_NAME } elseif ($env:LAMBDADOOM_NAME) { $env:LAMBDADOOM_NAME } else { 'doom' }
 $configPath = Join-Path $HomeDir 'config.toml'
 $failed     = $false
 
-# Resolve the hellbox binary: HELLBOX_BIN, the cached copy, then a local build.
+# Resolve a current hellbox CLI from its explicit override, cache, PATH, then a
+# local build. Legacy ldoom binaries do not implement `destroy`; accepting one
+# here would make teardown fail after the user already confirmed it.
 $exe = $null
+$pathHellbox = Get-Command hellbox.exe -ErrorAction SilentlyContinue | Select-Object -First 1
 foreach ($c in @($env:HELLBOX_BIN, (Join-Path $BinDir 'hellbox.exe'),
+                 $pathHellbox.Source,
                  (Join-Path $PSScriptRoot 'rs-cli\target\release\hellbox.exe'))) {
   if ($c -and (Test-Path $c -PathType Leaf)) { $exe = $c; break }
 }
@@ -146,44 +160,19 @@ if (Test-Path $configPath) {
 # it, and skips gracefully when the stack is already gone). With no config there
 # is nothing to tear down, so don't invoke it just to fail.
 if ($removeAws -and $exe -and (Test-Path $configPath)) {
-  Info "Tearing down AWS resources: $exe destroy --yes"
+  Info "Tearing down AWS resources: $exe destroy --name $Name --yes"
   $env:HELLBOX_HOME = $HomeDir
-  & $exe destroy --yes
+  $env:HELLBOX_STACK = $Stack
+  & $exe destroy --name $Name --yes
   if ($LASTEXITCODE -ne 0) { Warn "hellbox destroy failed (exit $LASTEXITCODE)"; $failed = $true }
 }
 elseif ($removeAws -and (Test-Path $configPath)) {
-  # No binary, but a stack may still exist. Fall back to the AWS CLI.
-  if (-not (Have aws)) {
-    Warn "no hellbox binary and no AWS CLI found -- cannot tear down AWS. Delete the '$Stack' stack manually."
-    $failed = $true
-  } else {
-    $region = Get-ConfigRegion
-    Info "Tearing down CloudFormation stack '$Stack' in $region (AWS CLI)"
-    $desc = aws cloudformation describe-stacks --region $region --stack-name $Stack 2>&1
-    if ($LASTEXITCODE -ne 0) {
-      if ("$desc" -match 'does not exist') {
-        Info "stack '$Stack' not found in $region -- nothing to delete"
-      } else {
-        Warn "could not describe stack '$Stack' in ${region}: $desc"; $failed = $true
-      }
-    } else {
-      $bucket = aws cloudformation describe-stacks --region $region --stack-name $Stack `
-        --query "Stacks[0].Outputs[?OutputKey=='ArtifactBucket'].OutputValue" --output text 2>$null
-      if ($bucket -and $bucket -ne 'None') {
-        Info "Emptying artifact bucket: $bucket"
-        aws s3 rm "s3://$bucket" --recursive | Out-Null
-        if ($LASTEXITCODE -ne 0) { Warn "could not empty s3://$bucket -- delete its objects manually"; $failed = $true }
-      }
-      Info "Deleting stack '$Stack'"
-      aws cloudformation delete-stack --region $region --stack-name $Stack
-      if ($LASTEXITCODE -ne 0) {
-        Warn "delete-stack failed for '$Stack' -- check the CloudFormation console"; $failed = $true
-      } else {
-        aws cloudformation wait stack-delete-complete --region $region --stack-name $Stack
-        if ($LASTEXITCODE -ne 0) { Warn "stack '$Stack' did not finish deleting -- check the console (resources may remain and still bill)"; $failed = $true }
-      }
-    }
-  }
+  # Fail closed without the CLI. The CLI verifies stack ownership and removes
+  # MicroVM/image state before deleting CloudFormation resources; an AWS CLI
+  # fallback cannot safely reproduce those guarantees from editable local config.
+  Warn "no hellbox/ldoom binary found -- refusing AWS teardown because stack ownership and capsule cleanup cannot be verified."
+  Warn "reinstall the CLI or put it on PATH, then retry; local state was preserved."
+  $failed = $true
 }
 elseif (-not (Test-Path $configPath)) {
   Info "No config found -- nothing to tear down in AWS."
@@ -207,6 +196,7 @@ if ($homeCheck.Remove) {
   }
 } elseif (Test-Path $HomeDir) {
   Warn "refusing to remove ${HomeDir}: $($homeCheck.Reason). Remove it by hand if you are sure."
+  exit 1
 } else {
   Info "Local state not found, skipping: $HomeDir"
 }

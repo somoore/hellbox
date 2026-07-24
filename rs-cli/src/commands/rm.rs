@@ -79,18 +79,7 @@ pub async fn run(name: &str) -> Result<()> {
 /// Terminate every non-terminated MicroVM built from `image_arn` and wait it
 /// out, so a delete of that image isn't blocked by a MicroVM local state forgot.
 async fn terminate_image_microvms(aws: &Aws, name: &str, image_arn: &str) -> Result<()> {
-    let live = aws
-        .microvm
-        .list_microvms()
-        .send()
-        .await
-        .context("list_microvms")?;
-    let ids: Vec<String> = live
-        .items()
-        .iter()
-        .filter(|m| m.image_arn() == image_arn && m.state().as_str() != "TERMINATED")
-        .map(|m| m.microvm_id().to_string())
-        .collect();
+    let ids = image_microvm_ids(aws, image_arn).await?;
 
     for id in &ids {
         tracing::info!(target: "hellbox::rm", "terminating microvm {id} (built from the image being removed)");
@@ -126,6 +115,36 @@ async fn terminate_image_microvms(aws: &Aws, name: &str, image_arn: &str) -> Res
         .await;
     }
     Ok(())
+}
+
+/// Lists every live MicroVM built from an image.
+///
+/// The Lambda MicroVM API paginates account-wide results. This helper follows
+/// every page so cleanup and confirmation plans cannot silently omit a later
+/// MicroVM that still blocks image deletion.
+pub(crate) async fn image_microvm_ids(aws: &Aws, image_arn: &str) -> Result<Vec<String>> {
+    let mut ids = Vec::new();
+    let mut next_token: Option<String> = None;
+
+    loop {
+        let mut request = aws.microvm.list_microvms();
+        if let Some(token) = next_token.as_deref() {
+            request = request.next_token(token);
+        }
+        let page = request.send().await.context("list_microvms")?;
+        ids.extend(
+            page.items()
+                .iter()
+                .filter(|m| m.image_arn() == image_arn && m.state().as_str() != "TERMINATED")
+                .map(|m| m.microvm_id().to_string()),
+        );
+        next_token = page.next_token().map(str::to_owned);
+        if next_token.is_none() {
+            break;
+        }
+    }
+
+    Ok(ids)
 }
 
 async fn delete_image_with_retry(aws: &Aws, image_arn: &str) -> Result<()> {

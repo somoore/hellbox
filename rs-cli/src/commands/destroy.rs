@@ -31,6 +31,11 @@ pub async fn run(name: &str, yes: bool) -> Result<()> {
     crate::aws::require_same_account(&cfg, &identity)?;
     let aws = Aws::from_sdk_config(&sdk);
     let capsule = state.get(name).cloned();
+    let image_arn = capsule
+        .as_ref()
+        .and_then(|c| c.image_arn.clone())
+        .unwrap_or_else(|| crate::discover::image_arn(&cfg.region, &identity.account, name));
+    let live_microvm_ids = super::rm::image_microvm_ids(&aws, &image_arn).await?;
 
     // Build the exact plan first, verifying ownership of everything on it.
     let stack = describe_stack(&aws, &stack_name).await?;
@@ -63,20 +68,19 @@ pub async fn run(name: &str, yes: bool) -> Result<()> {
 
     // Show exactly what goes away, and why.
     println!("hellbox destroy will remove exactly these Hellbox-created resources:");
-    match &capsule {
-        Some(c) => {
-            if let Some(id) = &c.microvm_id {
-                println!("  • MicroVM  {id}  (the running DOOM machine)");
+    if live_microvm_ids.is_empty() {
+        match capsule.as_ref().and_then(|c| c.microvm_id.as_deref()) {
+            Some(id) => {
+                println!("  • MicroVM  {id}  (recorded locally; already gone or terminating)")
             }
-            if let Some(arn) = &c.image_arn {
-                println!("  • Image    {arn}  (the baked DOOM snapshot)");
-            }
-            if c.microvm_id.is_none() && c.image_arn.is_none() {
-                println!("  • MicroVM/image: none recorded — skipped");
-            }
+            None => println!("  • MicroVM: none found for this image"),
         }
-        None => println!("  • MicroVM/image: none recorded — skipped"),
+    } else {
+        for id in &live_microvm_ids {
+            println!("  • MicroVM  {id}  (live machine built from the image)");
+        }
     }
+    println!("  • Image    {image_arn}  (the deterministic '{name}' capsule image, if present)");
     match (&stack, &stack_bucket) {
         (Some(_), Some(b)) => {
             println!(
@@ -103,16 +107,11 @@ pub async fn run(name: &str, yes: bool) -> Result<()> {
         confirm_interactive()?;
     }
 
-    // MicroVM + image first: DeleteMicrovmImage fails while one is live, and
-    // the stack can't go while the bucket still has build contexts.
-    if capsule
-        .as_ref()
-        .map(|c| c.microvm_id.is_some() || c.image_arn.is_some())
-        .unwrap_or(false)
-    {
-        println!("==> Removing the '{name}' microvm and image");
-        super::rm::run(name).await?;
-    }
+    // MicroVM + image first: DeleteMicrovmImage fails while one is live. Run
+    // this even without local capsule state because the deterministic image ARN
+    // and paginated listing can recover resources a previous deploy forgot.
+    println!("==> Removing the '{name}' microvm and image (if present)");
+    super::rm::run(name).await?;
 
     if stack.is_some() {
         if let Some(bucket) = &stack_bucket {

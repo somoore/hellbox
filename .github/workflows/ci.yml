@@ -31,7 +31,7 @@ jobs:
       code: ${{ steps.f.outputs.code }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: f
         with:
           # Each category maps to the files that affect that job. Changing the
@@ -201,7 +201,7 @@ jobs:
       - name: Verify embedded capsule matches tracked files
         run: scripts/check-embedded-capsule.sh
       - name: Lint Dockerfile
-        uses: hadolint/hadolint-action@2332a7b74a6de0dda2e2221d575162eba76ba5e5 # v3.3.0
+        uses: hadolint/hadolint-action@2a66e89f53d0771bb131a7fa31f3136336094aa6 # v3.4.0
         with:
           dockerfile: capsule/Dockerfile
       - name: Compile-check capsule Python

@@ -52,7 +52,7 @@ aws-credential-types = "1"
 time = { version = "0.3", features = ["parsing"] }  # parse credential_process Expiration
 
 # build artifact
-zip = "8.6"
+zip = "9.0"
 walkdir = "2"              # recurse capsule/ when building the context zip
 
 # open the browser tab (the "double-click")

@@ -49,3 +49,8 @@ updates:
       pip:
         patterns:
           - "*"
+    ignore:
+      # capsule is cp311/aarch64; numpy >=2.5 requires Python >=3.12 and ships no
+      # cp311 wheels, so scripts/check-reqs.sh fails. Ceiling is the 2.4.x line.
+      - dependency-name: numpy
+        versions: [">=2.5.0"]

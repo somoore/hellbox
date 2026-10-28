@@ -47,14 +47,4 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 # (see commit "ctutils 0.4.2 -> 0.4.5 (RUSTSEC-2026-0385)"); only ignore when
 # no patched version resolves.
 [advisories]
-ignore = [
-    # RUSTSEC-2026-0387: timing side-channel in crypto-bigint 0.5.5
-    # (non-constant-time arithmetic). Pulled in transitively, not used directly:
-    #   hellbox -> aws-config / aws-sdk-* -> aws-runtime -> aws-sigv4 -> crypto-bigint 0.5.5
-    # No clean upgrade available: `cargo update -p crypto-bigint` is a no-op, and
-    # even aws-sigv4 1.6.3 (latest) still depends on crypto-bigint 0.5.5 alongside 0.7.x.
-    # Exploitation requires observing timing/uarch side channels on the signing host.
-    # REMOVE once aws-sigv4 no longer depends on crypto-bigint 0.5.x
-    # (re-check with: cargo tree -i crypto-bigint@0.5.5).
-    "RUSTSEC-2026-0387",
-]
+ignore = []

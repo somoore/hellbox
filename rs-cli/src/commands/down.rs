@@ -15,7 +15,10 @@ pub async fn run(name: &str) -> Result<()> {
         .clone()
         .with_context(|| format!("capsule '{name}' has no running microvm"))?;
 
-    let aws = Aws::new(&cfg).await?;
+    let (sdk, identity) =
+        crate::aws::resolve_with_profile(&cfg.region, cfg.aws_profile.as_deref()).await?;
+    crate::aws::require_same_account(&cfg, &identity)?;
+    let aws = Aws::from_sdk_config(&sdk);
     aws.microvm
         .terminate_microvm()
         .microvm_identifier(&microvm_id)

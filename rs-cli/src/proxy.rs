@@ -3,14 +3,14 @@
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::RwLock;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering};
 
 use anyhow::{Context, Result};
 use aws_sdk_lambdamicrovms::Client as MicrovmClient;
 use aws_sdk_lambdamicrovms::types::PortSpecification;
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
-use http_body_util::{BodyExt, Full};
+use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::Incoming;
 use hyper::header::{HeaderMap, HeaderName, HeaderValue};
 use hyper::service::service_fn;
@@ -34,6 +34,19 @@ const TOKEN_TTL_MINUTES: i32 = 30;
 pub const ENTRY_TOKEN_TTL: std::time::Duration = std::time::Duration::from_secs(120);
 const CONTROL_COOKIE_NAME: &str = "hellbox_control";
 const CONTROL_COOKIE_PREFIX: &str = "hellbox_control=";
+/// Cookie lifetime. It is per-run (minted after the entry token) and short: a
+/// cookie cannot be port-scoped, so keep the window in which another loopback
+/// service could harvest a still-useful value small.
+const CONTROL_COOKIE_MAX_AGE: u64 = 3600;
+/// Control-plane authorization. This token is injected into the served page
+/// (same-origin, `Cache-Control: no-store`) and sent in a custom header, never as
+/// a cookie. A page on another loopback port receives the cookie but cannot read
+/// this page, so it cannot drive suspend/resume — unlike an ambient cookie.
+const CONTROL_TOKEN_HEADER: &str = "x-hellbox-control";
+const CONTROL_TOKEN_PLACEHOLDER: &str = "__HELLBOX_CONTROL_TOKEN__";
+/// Inbound bodies are buffered in memory. Cap them so a local POST (including one
+/// from a loopback page holding the cookie) cannot OOM the proxy.
+const MAX_INBOUND_BODY: usize = 1 << 20;
 
 #[cfg(test)]
 const AUTH_HEADER: &str = "x-aws-proxy-auth";
@@ -91,7 +104,15 @@ pub struct ProxyControl {
     pub name: String,
     pub token_ports: Vec<i32>,
     pub upstream: Upstream,
+    /// Data-plane session secret: the single-use entry token and the value of the
+    /// HttpOnly `hellbox_control` cookie. Cookies are host-scoped, not port-scoped,
+    /// so other loopback services see this value; it therefore authorizes the game
+    /// stream/input only, never control actions.
     pub control_secret: String,
+    /// Control-plane secret: injected into the served page and sent as
+    /// `x-hellbox-control`. Never set as a cookie, so harvesting the cookie does
+    /// not yield the ability to suspend/resume.
+    pub control_token: String,
     /// The entry token is single-use: the opener passes it in argv (xdg-open /
     /// open take the URL as an argument, so this is unavoidable), which is
     /// world-readable via /proc on Linux. Consuming it on the first successful
@@ -110,6 +131,9 @@ pub struct ProxyConfig {
     pub upstream: Upstream,
     pub upstream_port: i32,
     pub local_port: u16,
+    /// The port the listener actually bound. `local_port` may be 0 (ephemeral
+    /// fallback when 6080 is taken), so Origin checks compare against this.
+    pub bound_port: Arc<AtomicU16>,
     pub routes: Vec<(String, i32)>,
     pub activity: Option<Arc<ProxyActivity>>,
     pub control: Option<Arc<ProxyControl>>,
@@ -124,6 +148,10 @@ impl ProxyConfig {
             })
             .unwrap_or(self.upstream_port)
     }
+
+    fn bound_port(&self) -> u16 {
+        self.bound_port.load(Ordering::SeqCst)
+    }
 }
 
 pub async fn start(cfg: ProxyConfig) -> Result<String> {
@@ -132,6 +160,9 @@ pub async fn start(cfg: ProxyConfig) -> Result<String> {
         .await
         .with_context(|| format!("binding loopback proxy on {addr}"))?;
     let local = listener.local_addr()?;
+    // Record the real port before serving so Origin checks match the ephemeral
+    // fallback too (open.rs retries with local_port 0 when 6080 is taken).
+    cfg.bound_port.store(local.port(), Ordering::SeqCst);
     let url = format!("http://{local}");
 
     let client = reqwest::Client::builder()
@@ -200,6 +231,19 @@ async fn handle(
     }))
 }
 
+/// Buffer an inbound body with a hard cap. `LengthLimitError` is surfaced to the
+/// caller so it can answer 413 instead of a generic 502.
+async fn read_body_bounded<B>(
+    body: B,
+    max: usize,
+) -> Result<Bytes, Box<dyn std::error::Error + Send + Sync>>
+where
+    B: hyper::body::Body,
+    B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+    Ok(Limited::new(body, max).collect().await?.to_bytes())
+}
+
 async fn handle_http(
     req: Request<Incoming>,
     cfg: Arc<ProxyConfig>,
@@ -230,6 +274,7 @@ async fn handle_http(
         return Ok(html_response_with_control_secret(
             control_only_page(),
             &ctrl.control_secret,
+            &ctrl.control_token,
         ));
     }
     // Avoid 304s so panel injection has a body.
@@ -239,11 +284,19 @@ async fn handle_http(
     }
     let fwd_headers = build_upstream_headers(&parts.headers, &token, port);
 
-    let body_bytes = body
-        .collect()
-        .await
-        .context("reading inbound body")?
-        .to_bytes();
+    let body_bytes = match read_body_bounded(body, MAX_INBOUND_BODY).await {
+        Ok(b) => b,
+        Err(e)
+            if e.downcast_ref::<http_body_util::LengthLimitError>()
+                .is_some() =>
+        {
+            return Ok(json_response(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                r#"{"error":"request body too large"}"#.to_string(),
+            ));
+        }
+        Err(e) => return Err(anyhow::anyhow!("reading inbound body: {e}")),
+    };
 
     let mut resp = match client
         .request(method.clone(), &upstream)
@@ -262,6 +315,7 @@ async fn handle_http(
                 return Ok(html_response_with_control_secret(
                     control_only_page(),
                     &ctrl.control_secret,
+                    &ctrl.control_token,
                 ));
             }
             return Err(e).with_context(|| format!("forwarding to {upstream}"));
@@ -293,6 +347,7 @@ async fn handle_http(
         return Ok(html_response_with_control_secret(
             control_only_page(),
             &ctrl.control_secret,
+            &ctrl.control_token,
         ));
     }
     let upstream_headers = resp.headers().clone();
@@ -305,8 +360,8 @@ async fn handle_http(
 
     // Add controls without rebuilding the capsule image.
     let injected = is_root && is_get && is_html && cfg.control.is_some();
-    let bytes = if injected {
-        inject_panel(&bytes)
+    let bytes = if let (Some(ctrl), true) = (&cfg.control, injected) {
+        inject_panel(&bytes, &ctrl.control_token)
     } else {
         bytes
     };
@@ -354,7 +409,7 @@ async fn handle_http(
         );
         if let Some(ctrl) = &cfg.control {
             let cookie = format!(
-                "hellbox_control={}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400",
+                "{CONTROL_COOKIE_NAME}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age={CONTROL_COOKIE_MAX_AGE}",
                 ctrl.control_secret
             );
             if let Ok(v) = HeaderValue::from_str(&cookie) {
@@ -541,7 +596,10 @@ fn build_upstream_headers(
     let mut out = reqwest::header::HeaderMap::new();
     for (name, value) in inbound.iter() {
         let n = name.as_str();
-        if is_hop_by_hop(n) || n.eq_ignore_ascii_case("host") {
+        if is_hop_by_hop(n)
+            || n.eq_ignore_ascii_case("host")
+            || n.eq_ignore_ascii_case(CONTROL_TOKEN_HEADER)
+        {
             continue;
         }
         if n.eq_ignore_ascii_case("cookie") {
@@ -589,23 +647,56 @@ fn is_hop_by_hop(name: &str) -> bool {
     )
 }
 
-/// Accept only loopback Host/Origin authority.
-fn is_loopback_authority(value: &str) -> bool {
+/// Parse a Host/Origin authority into `(host, port)`. Returns `None` for a
+/// non-loopback host, userinfo (`user@host`), or anything malformed. Browsers
+/// never emit userinfo in these headers, so rejecting `@` closes a parser
+/// confusion (`127.0.0.1:6080@evil.com`) rather than relying on that.
+fn loopback_authority_parts(value: &str) -> Option<(&str, Option<u16>)> {
     let v = value.trim();
     let v = v
         .strip_prefix("http://")
         .or_else(|| v.strip_prefix("https://"))
         .unwrap_or(v);
     let v = v.split('/').next().unwrap_or(v);
-    let host = if let Some(rest) = v.strip_prefix('[') {
-        rest.split(']').next().unwrap_or(rest)
+    if v.is_empty() || v.contains('@') {
+        return None;
+    }
+    let (host, port) = if let Some(rest) = v.strip_prefix('[') {
+        let (host, tail) = rest.split_once(']')?;
+        let port = match tail {
+            "" => None,
+            _ => Some(tail.strip_prefix(':')?.parse::<u16>().ok()?),
+        };
+        (host, port)
+    } else if v == "::1" {
+        (v, None)
+    } else if let Some((host, port)) = v.rsplit_once(':') {
+        match port.parse::<u16>() {
+            Ok(p) => (host, Some(p)),
+            Err(_) => (v, None),
+        }
     } else {
-        v.rsplit_once(':').map(|(h, _)| h).unwrap_or(v)
+        (v, None)
     };
-    matches!(host, "127.0.0.1" | "localhost" | "::1")
+    matches!(host, "127.0.0.1" | "localhost" | "::1").then_some((host, port))
 }
 
-fn loopback_metadata_ok(headers: &HeaderMap) -> bool {
+/// Accept only loopback Host/Origin authorities.
+fn is_loopback_authority(value: &str) -> bool {
+    loopback_authority_parts(value).is_some()
+}
+
+/// An Origin must name a loopback host *and* the exact port this proxy bound.
+/// Cookies have no port isolation, so a page on `127.0.0.1:<other port>` is
+/// same-site; only this check separates it from the proxy origin.
+fn origin_matches_local_port(value: &str, local_port: u16) -> bool {
+    matches!(
+        loopback_authority_parts(value),
+        Some((_, Some(port))) if port == local_port
+    )
+}
+
+fn loopback_metadata_ok(headers: &HeaderMap, local_port: u16) -> bool {
     let host_ok = headers
         .get(hyper::header::HOST)
         .and_then(|v| v.to_str().ok())
@@ -615,10 +706,36 @@ fn loopback_metadata_ok(headers: &HeaderMap) -> bool {
         .get(hyper::header::ORIGIN)
         .and_then(|v| v.to_str().ok())
     {
-        Some(o) => is_loopback_authority(o),
+        Some(o) => origin_matches_local_port(o, local_port),
+        // No Origin: a top-level navigation or a non-browser client. The data
+        // plane keeps accepting this (the CLI verifier sends no Origin and
+        // subresource GETs omit it); mutating control actions do not.
         None => true,
     };
     host_ok && origin_ok
+}
+
+/// Mutating control actions must come from the served page: an explicit Origin
+/// naming the bound port, and (when the browser supplies it) same-origin fetch
+/// metadata. A request with no Origin is not a browser page and is refused, so
+/// replaying a harvested cookie with no Origin cannot suspend or resume.
+fn control_origin_ok(headers: &HeaderMap, local_port: u16) -> bool {
+    let origin_ok = headers
+        .get(hyper::header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|o| origin_matches_local_port(o, local_port));
+    let site_ok = headers
+        .get("sec-fetch-site")
+        .and_then(|v| v.to_str().ok())
+        .is_none_or(|s| s.eq_ignore_ascii_case("same-origin"));
+    origin_ok && site_ok
+}
+
+fn has_control_token(headers: &HeaderMap, token: &str) -> bool {
+    headers
+        .get(CONTROL_TOKEN_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| subtle_eq(v.as_bytes(), token.as_bytes()))
 }
 
 fn has_local_session(headers: &HeaderMap, secret: &str) -> bool {
@@ -647,7 +764,7 @@ fn has_entry_token<B>(req: &Request<B>, secret: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn allowed_initial_navigation(req: &Request<Incoming>, ctrl: &ProxyControl) -> bool {
+fn allowed_initial_navigation<B>(req: &Request<B>, ctrl: &ProxyControl) -> bool {
     if std::time::Instant::now() > ctrl.entry_token_deadline {
         return false;
     }
@@ -702,6 +819,13 @@ fn is_top_level_navigation(headers: &HeaderMap) -> bool {
 }
 
 fn expected_forward_path(path: &str) -> bool {
+    // Browsers normalize dot-segments before sending; a hand-crafted target that
+    // keeps `..` or an encoded dot/slash could escape a prefix allowlist in the
+    // guest's static handler. Reject it here rather than rely on that handler.
+    let lower = path.to_ascii_lowercase();
+    if path.contains("..") || lower.contains("%2e") || lower.contains("%2f") {
+        return false;
+    }
     path == "/"
         || path == "/vnc.html"
         || path == "/websockify"
@@ -720,18 +844,22 @@ fn expected_forward_path(path: &str) -> bool {
         || path.starts_with("/utils/")
 }
 
-fn data_plane_rejection(
-    req: &Request<Incoming>,
-    cfg: &ProxyConfig,
-) -> Option<Response<Full<Bytes>>> {
-    let ctrl = cfg.control.as_ref()?;
+fn data_plane_rejection<B>(req: &Request<B>, cfg: &ProxyConfig) -> Option<Response<Full<Bytes>>> {
+    // Fail closed: the proxy exists to inject auth and gate the loopback session.
+    // Without a control plane there is no secret to check, so nothing may pass.
+    let Some(ctrl) = cfg.control.as_ref() else {
+        return Some(json_response(
+            StatusCode::FORBIDDEN,
+            r#"{"error":"control plane disabled"}"#.to_string(),
+        ));
+    };
     if !expected_forward_path(req.uri().path()) {
         return Some(json_response(
             StatusCode::FORBIDDEN,
             r#"{"error":"unexpected local proxy path"}"#.to_string(),
         ));
     }
-    if !loopback_metadata_ok(req.headers()) {
+    if !loopback_metadata_ok(req.headers(), cfg.bound_port()) {
         return Some(json_response(
             StatusCode::FORBIDDEN,
             r#"{"error":"data-plane proxy is loopback-only"}"#.to_string(),
@@ -784,10 +912,26 @@ fn html_response(body: String) -> Response<Full<Bytes>> {
     resp
 }
 
-fn html_response_with_control_secret(body: String, secret: &str) -> Response<Full<Bytes>> {
-    let mut resp = html_response(body);
-    let cookie =
-        format!("hellbox_control={secret}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400");
+fn html_response_with_control_secret(
+    body: String,
+    secret: &str,
+    token: &str,
+) -> Response<Full<Bytes>> {
+    let mut resp = html_response(body.replace(CONTROL_TOKEN_PLACEHOLDER, token));
+    // The body carries the control token and the URL carries the entry token:
+    // never cache it and never leak it through a Referer.
+    resp.headers_mut().insert(
+        hyper::header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
+    );
+    resp.headers_mut().insert(
+        HeaderName::from_static("referrer-policy"),
+        HeaderValue::from_static("no-referrer"),
+    );
+    let cookie = format!(
+        "{CONTROL_COOKIE_NAME}={secret}; Path=/; HttpOnly; SameSite=Strict; \
+         Max-Age={CONTROL_COOKIE_MAX_AGE}"
+    );
     if let Ok(v) = HeaderValue::from_str(&cookie) {
         resp.headers_mut().insert(hyper::header::SET_COOKIE, v);
     }
@@ -817,8 +961,9 @@ async fn handle_control(
             ));
         }
     };
+    let local_port = cfg.bound_port();
     // Local control calls use the user's AWS creds; require loopback metadata.
-    if !loopback_metadata_ok(req.headers()) {
+    if !loopback_metadata_ok(req.headers(), local_port) {
         tracing::warn!(target: "hellbox::proxy", "rejected control request (non-loopback Host or Origin)");
         return Ok(json_response(
             StatusCode::FORBIDDEN,
@@ -826,26 +971,36 @@ async fn handle_control(
         ));
     }
 
-    if !has_local_session(req.headers(), &ctrl.control_secret) {
-        // Debug, not warn: the control page's own poll hits this before the
-        // session cookie is set, every few seconds during normal operation. A
-        // real off-loopback probe is caught by the non-loopback check above.
-        tracing::debug!(target: "hellbox::proxy", "rejected control request (missing/invalid local session secret)");
+    // A per-run token injected into the served page, not the data-plane cookie:
+    // cookies are shared with every loopback port, this header is not.
+    if !has_control_token(req.headers(), &ctrl.control_token) {
+        tracing::debug!(target: "hellbox::proxy", "rejected control request (missing/invalid control token)");
         return Ok(json_response(
             StatusCode::FORBIDDEN,
-            r#"{"error":"missing local session secret"}"#.to_string(),
+            r#"{"error":"missing control token"}"#.to_string(),
         ));
     }
 
     let method = req.method().clone();
     let action = control_action(req.uri().path()).unwrap_or_default();
 
-    // Keep mutating actions off simple GETs.
-    if matches!(action.as_str(), "suspend" | "resume") && method != hyper::Method::POST {
-        return Ok(json_response(
-            StatusCode::METHOD_NOT_ALLOWED,
-            r#"{"error":"use POST"}"#.to_string(),
-        ));
+    // Keep mutating actions off simple GETs, and require a real same-origin
+    // browser request: an Origin-less replay (harvested cookie/token with curl)
+    // must not be able to suspend or resume.
+    if matches!(action.as_str(), "suspend" | "resume") {
+        if method != hyper::Method::POST {
+            return Ok(json_response(
+                StatusCode::METHOD_NOT_ALLOWED,
+                r#"{"error":"use POST"}"#.to_string(),
+            ));
+        }
+        if !control_origin_ok(req.headers(), local_port) {
+            tracing::warn!(target: "hellbox::proxy", "rejected control action (not same-origin)");
+            return Ok(json_response(
+                StatusCode::FORBIDDEN,
+                r#"{"error":"control actions require a same-origin request"}"#.to_string(),
+            ));
+        }
     }
 
     let result: Result<String> = match action.as_str() {
@@ -998,12 +1153,15 @@ fn cookie_has_control_secret(cookie: &str, secret: &str) -> bool {
     cookie.split(';').any(|part| {
         let part = part.trim();
         part.strip_prefix(CONTROL_COOKIE_PREFIX)
-            .map(|v| v == secret)
-            .unwrap_or(false)
+            .is_some_and(|v| subtle_eq(v.as_bytes(), secret.as_bytes()))
     })
 }
 
-fn inject_panel(body: &Bytes) -> Bytes {
+fn with_control_token(html: &str, token: &str) -> String {
+    html.replace(CONTROL_TOKEN_PLACEHOLDER, token)
+}
+
+fn inject_panel(body: &Bytes, token: &str) -> Bytes {
     match std::str::from_utf8(body) {
         Ok(html) => {
             let injected = if let Some(idx) = html.rfind("</body>") {
@@ -1015,7 +1173,7 @@ fn inject_panel(body: &Bytes) -> Bytes {
             } else {
                 format!("{html}{CONTROL_PANEL}")
             };
-            Bytes::from(injected)
+            Bytes::from(with_control_token(&injected, token))
         }
         Err(_) => body.clone(),
     }
@@ -1077,7 +1235,7 @@ body{display:flex;flex-direction:column;align-items:center;justify-content:cente
 <script>
 var dot=document.getElementById('dot'),status=document.getElementById('status'),
     head=document.getElementById('head'),sub=document.getElementById('sub'),
-    btn=document.getElementById('btn'),busy=false,cur='';
+    btn=document.getElementById('btn'),busy=false,cur='',HCTL='__HELLBOX_CONTROL_TOKEN__';
 function paint(s){
   cur=s;
   if(s==='RUNNING'){dot.style.background='#57C77E';status.textContent='running';
@@ -1091,7 +1249,7 @@ function paint(s){
   else{dot.style.background='#888';status.textContent=s||'…';btn.textContent='…';btn.disabled=true;}
 }
 function poll(){if(busy)return;
-  fetch('/__hellbox/state').then(function(r){return r.json();})
+  fetch('/__hellbox/state',{headers:{'X-Hellbox-Control':HCTL}}).then(function(r){return r.json();})
     .then(function(j){if(j.state)paint(j.state);})
     .catch(function(){status.textContent='proxy offline';dot.style.background='#888';});}
 btn.onclick=function(){
@@ -1099,7 +1257,7 @@ btn.onclick=function(){
   var act=cur==='RUNNING'?'suspend':cur==='SUSPENDED'?'resume':null;if(!act)return;
   busy=true;btn.disabled=true;dot.style.background='#58a6ff';
   status.textContent=act==='suspend'?'suspending…':'resuming…';
-  fetch('/__hellbox/'+act,{method:'POST'}).then(function(r){return r.json();})
+  fetch('/__hellbox/'+act,{method:'POST',headers:{'X-Hellbox-Control':HCTL}}).then(function(r){return r.json();})
     .then(function(j){busy=false;
       if(act==='resume'&&j.state==='RUNNING'){status.textContent='resumed · loading…';
         setTimeout(function(){var u=new URL(location.href);u.searchParams.set('resumed','1');location.href=u.toString();},700);return;}
@@ -1133,7 +1291,7 @@ const CONTROL_PANEL: &str = r##"
   var dot=document.getElementById('hellbox-dot');
   var st=document.getElementById('hellbox-status');
   var btn=document.getElementById('hellbox-btn');
-  var busy=false, cur='';
+  var busy=false, cur='', HCTL='__HELLBOX_CONTROL_TOKEN__';
   function paint(state){
     cur=state;
     var map={RUNNING:['#57C77E','Running','Suspend'],
@@ -1145,7 +1303,7 @@ const CONTROL_PANEL: &str = r##"
   }
   function poll(){
     if(busy)return;
-    fetch('/__hellbox/state').then(function(r){return r.json();})
+    fetch('/__hellbox/state',{headers:{'X-Hellbox-Control':HCTL}}).then(function(r){return r.json();})
       .then(function(j){if(j.state)paint(j.state);}).catch(function(){});
   }
   btn.onclick=function(){
@@ -1154,7 +1312,7 @@ const CONTROL_PANEL: &str = r##"
     if(!act)return;
     busy=true;btn.disabled=true;dot.style.background='#58a6ff';
     st.textContent=act==='suspend'?'Suspending…':'Resuming…';
-    fetch('/__hellbox/'+act,{method:'POST'}).then(function(r){return r.json();})
+    fetch('/__hellbox/'+act,{method:'POST',headers:{'X-Hellbox-Control':HCTL}}).then(function(r){return r.json();})
       .then(function(j){
         busy=false;
         if(act==='resume'&&j.state==='RUNNING'){
@@ -1182,6 +1340,7 @@ mod tests {
             ),
             upstream_port: 6901,
             local_port: 0,
+            bound_port: Arc::new(AtomicU16::new(6080)),
             routes: vec![
                 ("/hellbox/audio".into(), 6902),
                 ("/hellbox/video".into(), 6903),
@@ -1198,9 +1357,13 @@ mod tests {
     #[test]
     fn inject_panel_splices_before_body() {
         let html = Bytes::from("<html><body><h1>hi</h1></body></html>");
-        let out = inject_panel(&html);
+        let out = inject_panel(&html, "control-token");
         let s = std::str::from_utf8(&out).unwrap();
         assert!(s.contains("hellbox-ctl"), "panel markup injected");
+        assert!(
+            s.contains("control-token") && !s.contains(CONTROL_TOKEN_PLACEHOLDER),
+            "control token substituted into the panel"
+        );
         let panel_at = s.find("hellbox-ctl").unwrap();
         let body_at = s.find("</body>").unwrap();
         let h1_at = s.find("<h1>hi</h1>").unwrap();
@@ -1213,7 +1376,7 @@ mod tests {
     #[test]
     fn inject_panel_appends_when_no_body_tag() {
         let html = Bytes::from("<div>no body tag</div>");
-        let out = inject_panel(&html);
+        let out = inject_panel(&html, "control-token");
         let s = std::str::from_utf8(&out).unwrap();
         assert!(
             s.starts_with("<div>no body tag</div>"),
@@ -1228,6 +1391,15 @@ mod tests {
         assert!(CONTROL_PANEL.contains("method:'POST'"), "POSTs the action");
         assert!(CONTROL_PANEL.contains("'Suspend'"), "offers Suspend");
         assert!(CONTROL_PANEL.contains("'Resume'"), "offers Resume");
+        assert!(
+            CONTROL_PANEL.contains(CONTROL_TOKEN_PLACEHOLDER),
+            "panel carries the control-token placeholder"
+        );
+        assert!(
+            CONTROL_PANEL.contains("X-Hellbox-Control"),
+            "panel sends the per-run control header"
+        );
+        assert!(!CONTROL_PANEL.contains("hellbox_control"));
     }
 
     #[test]
@@ -1238,6 +1410,40 @@ mod tests {
         assert!(
             page.contains("resumed"),
             "reconnects after resume (reloads with ?resumed=1)"
+        );
+        assert!(
+            page.contains(CONTROL_TOKEN_PLACEHOLDER) && page.contains("X-Hellbox-Control"),
+            "paused page sends the per-run control header"
+        );
+    }
+
+    #[tokio::test]
+    async fn paused_page_injects_control_token_and_short_cookie() {
+        let resp = html_response_with_control_secret(control_only_page(), "sec123", "tok456");
+        let cookie = resp
+            .headers()
+            .get(hyper::header::SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(cookie.contains("hellbox_control=sec123"));
+        assert!(cookie.contains("HttpOnly") && cookie.contains("SameSite=Strict"));
+        // Bounded lifetime: cookies are not port-scoped, so cap the exposure.
+        assert!(cookie.contains("Max-Age=3600"), "cookie: {cookie}");
+        assert_eq!(
+            resp.headers().get(hyper::header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
+        assert_eq!(
+            resp.headers().get("referrer-policy").unwrap(),
+            "no-referrer"
+        );
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let html = std::str::from_utf8(&bytes).unwrap();
+        assert!(html.contains("tok456"), "token injected into the page");
+        assert!(
+            !html.contains(CONTROL_TOKEN_PLACEHOLDER),
+            "no placeholder left"
         );
     }
 
@@ -1281,8 +1487,13 @@ mod tests {
             "cookie",
             HeaderValue::from_static("foo=bar; hellbox_control=abc123"),
         );
+        inbound.insert(CONTROL_TOKEN_HEADER, HeaderValue::from_static("tok"));
         let out = build_upstream_headers(&inbound, "the.secret.jwe", 6901);
         assert_eq!(out.get("cookie").unwrap(), "foo=bar");
+        assert!(
+            out.get(CONTROL_TOKEN_HEADER).is_none(),
+            "control token must never reach the guest"
+        );
     }
 
     #[test]
@@ -1372,10 +1583,94 @@ mod tests {
             "origin",
             HeaderValue::from_static("https://foreign.example"),
         );
-        assert!(!loopback_metadata_ok(&h));
+        assert!(!loopback_metadata_ok(&h, 6080));
 
         h.insert("origin", HeaderValue::from_static("http://127.0.0.1:6080"));
-        assert!(loopback_metadata_ok(&h));
+        assert!(loopback_metadata_ok(&h, 6080));
+    }
+
+    #[test]
+    fn origin_must_match_the_bound_port() {
+        let mut h = HeaderMap::new();
+        h.insert("host", HeaderValue::from_static("127.0.0.1:6080"));
+        // The pre-fix bypass: a page on another loopback port is same-site
+        // (cookies are host-scoped) but is a different origin.
+        h.insert("origin", HeaderValue::from_static("http://127.0.0.1:8000"));
+        assert!(!loopback_metadata_ok(&h, 6080));
+        // Bound-port aliases pass.
+        for origin in [
+            "http://127.0.0.1:6080",
+            "http://localhost:6080",
+            "http://[::1]:6080",
+        ] {
+            h.insert("origin", HeaderValue::from_static(origin));
+            assert!(loopback_metadata_ok(&h, 6080), "{origin} must pass");
+        }
+        // Ephemeral fallback: the check follows the actual bound port, not 6080.
+        h.insert("origin", HeaderValue::from_static("http://127.0.0.1:50123"));
+        assert!(loopback_metadata_ok(&h, 50123));
+        assert!(!loopback_metadata_ok(&h, 6080));
+        // An Origin with no port is port 80, never the proxy.
+        h.insert("origin", HeaderValue::from_static("http://127.0.0.1"));
+        assert!(!loopback_metadata_ok(&h, 6080));
+        // Origin-absent stays allowed for the data plane: the CLI verifier and
+        // subresource GETs send none.
+        h.remove("origin");
+        assert!(loopback_metadata_ok(&h, 6080));
+    }
+
+    #[test]
+    fn mutating_control_requires_same_origin() {
+        let mut h = HeaderMap::new();
+        h.insert("host", HeaderValue::from_static("127.0.0.1:6080"));
+        // No Origin at all (harvested cookie replayed with curl) fails.
+        assert!(!control_origin_ok(&h, 6080));
+        h.insert("origin", HeaderValue::from_static("http://127.0.0.1:8000"));
+        assert!(!control_origin_ok(&h, 6080));
+        h.insert("origin", HeaderValue::from_static("http://127.0.0.1:6080"));
+        assert!(control_origin_ok(&h, 6080));
+        // Cross-site fetch metadata fails even with a matching Origin.
+        h.insert("sec-fetch-site", HeaderValue::from_static("cross-site"));
+        assert!(!control_origin_ok(&h, 6080));
+        h.insert("sec-fetch-site", HeaderValue::from_static("same-origin"));
+        assert!(control_origin_ok(&h, 6080));
+    }
+
+    #[test]
+    fn control_token_is_a_header_not_the_cookie() {
+        let mut h = HeaderMap::new();
+        h.insert("cookie", HeaderValue::from_static("hellbox_control=tok123"));
+        assert!(
+            !has_control_token(&h, "tok123"),
+            "cookie must not authorize"
+        );
+        h.insert(CONTROL_TOKEN_HEADER, HeaderValue::from_static("tok123"));
+        assert!(has_control_token(&h, "tok123"));
+        assert!(!has_control_token(&h, "other"));
+    }
+
+    #[test]
+    fn data_plane_fails_closed_without_control() {
+        // No control plane means no secret to authenticate with: deny.
+        let c = cfg();
+        assert!(c.control.is_none());
+        let req = Request::builder()
+            .uri("/")
+            .header("host", "127.0.0.1:6080")
+            .body(Full::<Bytes>::new(Bytes::new()))
+            .unwrap();
+        assert!(data_plane_rejection(&req, &c).is_some());
+    }
+
+    #[tokio::test]
+    async fn body_over_limit_is_rejected() {
+        let big = Full::new(Bytes::from(vec![0u8; 2 * 1024 * 1024]));
+        assert!(read_body_bounded(big, MAX_INBOUND_BODY).await.is_err());
+        let ok = Full::new(Bytes::from_static(b"x"));
+        assert_eq!(
+            read_body_bounded(ok, MAX_INBOUND_BODY).await.unwrap().len(),
+            1
+        );
     }
 
     #[test]
@@ -1389,6 +1684,11 @@ mod tests {
         assert!(expected_forward_path("/core/rfb.js"));
         assert!(!expected_forward_path("/__hellbox/state"));
         assert!(!expected_forward_path("/random/admin"));
+        // No dot-segment or encoded-separator escapes through a prefix rule.
+        assert!(!expected_forward_path("/app/../../etc/passwd"));
+        assert!(!expected_forward_path("/core/%2e%2e/secret"));
+        assert!(!expected_forward_path("/app/%2E%2E/secret"));
+        assert!(!expected_forward_path("/app/x%2fy"));
     }
 
     #[test]
@@ -1470,6 +1770,11 @@ mod tests {
         assert!(!is_loopback_authority(
             "http://127.0.0.1.foreign.example:6080"
         ));
+        // Userinfo is never emitted by a browser; reject it so a later parser
+        // change cannot resurrect `127.0.0.1:6080@evil.com`.
+        assert!(!is_loopback_authority("127.0.0.1:6080@evil.com"));
+        assert!(!is_loopback_authority("http://127.0.0.1:6080@evil.com"));
+        assert!(!is_loopback_authority(""));
     }
 
     #[test]

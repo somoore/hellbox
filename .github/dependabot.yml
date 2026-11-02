@@ -7,6 +7,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Wait a week before proposing a fresh release: a poisoned publish is
+    # usually yanked inside that window, and security fixes still arrive.
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: ci
     labels:
@@ -24,6 +28,10 @@ updates:
     directory: /rs-cli
     schedule:
       interval: weekly
+    # Wait a week before proposing a fresh release: a poisoned publish is
+    # usually yanked inside that window, and security fixes still arrive.
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: deps
     labels:
@@ -40,6 +48,10 @@ updates:
     directory: /capsule
     schedule:
       interval: weekly
+    # Wait a week before proposing a fresh release: a poisoned publish is
+    # usually yanked inside that window, and security fixes still arrive.
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: deps
     labels:

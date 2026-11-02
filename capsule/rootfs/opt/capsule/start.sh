@@ -33,25 +33,30 @@ python3.11 /opt/hook.py & LOG "hook responder :9000 (503 until ready) pid $!"
 # Display stack.
 export HOME=/root USER=root
 rm -f /tmp/.X11-unix/X1 /tmp/.X1-lock 2>/dev/null || true
-# Match Chocolate Doom's 640x400 window.
-Xvnc :1 -geometry 640x400 -depth 24 -SecurityTypes None -rfbport 5901 \
+# Match Chocolate Doom's 640x400 window. Xvnc needs the X socket/lock under /tmp
+# and stays root, but it is bound to loopback: websockify is the only path to it,
+# and it has no authentication of its own.
+Xvnc :1 -geometry 640x400 -depth 24 -SecurityTypes None -rfbport 5901 -localhost \
      -AlwaysShared -desktop capsule > /var/log/xvnc.log 2>&1 &
-LOG "Xvnc starting (pid $!)"
+LOG "Xvnc starting on 127.0.0.1:5901 (pid $!)"
 for _ in $(seq 1 100); do [ -S /tmp/.X11-unix/X1 ] && break; sleep 0.2; done
 export DISPLAY=:1
 sleep 1
 xsetroot -solid black 2>/dev/null || true
 
-websockify --web=/opt/novnc 0.0.0.0:6901 localhost:5901 > /var/log/websockify.log 2>&1 &
-LOG "websockify :6901 -> 5901 (pid $!)"
+# The three network-facing stream daemons run as uid 1000, not root: they parse
+# untrusted frames from the endpoint's forwarder. Ports are >1024, they need no
+# privileged file, and the X server already accepts the app uid (DOOM runs as it).
+runuser -u app -- env HOME=/home/app websockify --web=/opt/novnc 0.0.0.0:6901 127.0.0.1:5901 > /var/log/websockify.log 2>&1 &
+LOG "websockify :6901 -> 127.0.0.1:5901 as 'app' (pid $!)"
 
 # H.264 video on :6903.
-DISPLAY=:1 python3.11 /opt/capsule/video_ws.py > /var/log/video_ws.log 2>&1 &
-LOG "video_ws (H.264) :6903 (pid $!)"
+runuser -u app -- env HOME=/home/app DISPLAY=:1 python3.11 /opt/capsule/video_ws.py > /var/log/video_ws.log 2>&1 &
+LOG "video_ws (H.264) :6903 as 'app' (pid $!)"
 # Supervised: a dead input channel at snapshot time bricks input for every
 # run/resume of the image, so restart it if it ever exits.
 ( while :; do
-    DISPLAY=:1 python3.11 /opt/capsule/input_ws.py >> /var/log/input_ws.log 2>&1
+    runuser -u app -- env HOME=/home/app DISPLAY=:1 python3.11 /opt/capsule/input_ws.py >> /var/log/input_ws.log 2>&1
     LOG "input_ws exited rc=$? -- restarting in 2s"
     sleep 2
   done ) &

@@ -69,7 +69,8 @@ pub async fn await_running(
     Ok(())
 }
 
-#[cfg(any(feature = "proxy", test))]
+// Used by both the proxy and the non-proxy deploy/discover paths, so it is not
+// feature-gated: `cargo build --no-default-features` must keep compiling.
 pub fn host_of(endpoint: &str) -> String {
     endpoint
         .trim_start_matches("https://")

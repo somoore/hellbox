@@ -539,4 +539,28 @@ region = us-west-2
         // Keys from other sections must not leak in.
         assert!(!keys.iter().any(|(k, _)| k == "sso_start_url"));
     }
+
+    fn config_for_account(account: Option<&str>) -> Config {
+        let mut toml = String::from(
+            "artifact_bucket = \"b\"\nbuild_role_arn = \"r\"\nbase_image_arn = \"i\"\n",
+        );
+        if let Some(a) = account {
+            toml.push_str(&format!("aws_account_id = \"{a}\"\n"));
+        }
+        toml::from_str(&toml).expect("test config")
+    }
+
+    #[test]
+    fn require_same_account_rejects_a_mismatch() {
+        let identity = Identity {
+            account: "444455556666".into(),
+            arn: "arn:aws:iam::444455556666:user/test".into(),
+        };
+        // No recorded account (hand-written config): the guard is a no-op.
+        assert!(require_same_account(&config_for_account(None), &identity).is_ok());
+        assert!(require_same_account(&config_for_account(Some("444455556666")), &identity).is_ok());
+        let err = require_same_account(&config_for_account(Some("111122223333")), &identity)
+            .expect_err("mismatch must bail");
+        assert!(err.to_string().contains("account mismatch"), "{err}");
+    }
 }

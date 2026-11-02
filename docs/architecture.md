@@ -249,10 +249,11 @@ went stale": it mints a fresh one with your credentials, swaps it in, and retrie
 request or WebSocket handshake once. Long play sessions never notice.
 
 The `/__hellbox/*` endpoints run AWS calls with your credentials, so they are hardened
-against CSRF, DNS rebinding, and blind local calls: the `Host` header must be loopback, the
-`Origin` (when present) must be the loopback origin, the request must carry the per-session
-HttpOnly `hellbox_control` cookie, and `suspend` and `resume` require `POST`. Full threat model
-in [security.md](security.md).
+against CSRF, DNS rebinding, and blind local calls: the `Host` header must be loopback, an
+`Origin` (when present) must name the loopback host *and* the exact port this proxy bound,
+the request must carry the per-run `x-hellbox-control` token injected into the served page
+(not the data-plane cookie), and `suspend` and `resume` require `POST` plus same-origin fetch
+metadata. Full threat model in [security.md](security.md).
 
 ---
 

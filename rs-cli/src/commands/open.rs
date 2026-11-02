@@ -128,6 +128,10 @@ async fn open_fork_b(args: OpenForkBArgs<'_>) -> Result<()> {
     let activity = Arc::new(ProxyActivity::default());
     let upstream = Upstream::new(host_of(endpoint), jwe.to_string());
     let control_secret = generate_control_secret()?;
+    // Control actions use a separate per-run token sent as a header, never the
+    // host-scoped cookie: a loopback service on another port receives the cookie
+    // but cannot read the served page, so it cannot suspend/resume the MicroVM.
+    let control_token = generate_control_secret()?;
     let control_secret_copy = control_secret.clone();
     let control = Arc::new(ProxyControl {
         microvm: aws.microvm.clone(),
@@ -136,6 +140,7 @@ async fn open_fork_b(args: OpenForkBArgs<'_>) -> Result<()> {
         token_ports: vec![port, audio_port, video_port, input_port],
         upstream: upstream.clone(),
         control_secret,
+        control_token,
         entry_token_used: std::sync::atomic::AtomicBool::new(false),
         entry_token_deadline: std::time::Instant::now() + proxy::ENTRY_TOKEN_TTL,
     });
@@ -143,6 +148,7 @@ async fn open_fork_b(args: OpenForkBArgs<'_>) -> Result<()> {
         upstream,
         upstream_port: port,
         local_port: 6080,
+        bound_port: Arc::new(std::sync::atomic::AtomicU16::new(0)),
         routes: vec![
             ("/hellbox/audio".to_string(), audio_port),
             ("/hellbox/video".to_string(), video_port),

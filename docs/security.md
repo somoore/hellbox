@@ -41,11 +41,13 @@ flowchart LR
   into page JavaScript, history, or logs.
 - **Loopback-only proxy.** It binds `127.0.0.1`, not your LAN or the internet.
 - **Hardened control endpoints.** `/__hellbox/{state,suspend,resume}` drive the control
-  plane with your credentials, so they require a loopback `Host`, a loopback `Origin` when
-  present, an HttpOnly per-session `hellbox_control` cookie, and `POST` for `suspend` and
-  `resume`. A cross-origin, DNS-rebound, or blind local request gets a 403. See
-  `is_loopback_authority` and `cookie_has_control_secret` in `rs-cli/src/proxy.rs` and their
-  tests.
+  plane with your credentials, so they require a loopback `Host`, an `Origin` whose host *and
+  port* match the listener that actually bound (`127.0.0.1:6080` or the ephemeral fallback),
+  a per-run `x-hellbox-control` token injected into the served page rather than a cookie, and
+  `POST` plus same-origin fetch metadata for `suspend` and `resume`. A cross-origin,
+  cross-*port* loopback, DNS-rebound, or blind local request gets a 403. See
+  `loopback_metadata_ok`, `origin_matches_local_port`, `control_origin_ok`, and
+  `has_control_token` in `rs-cli/src/proxy.rs` and their tests.
 - **Single-use per-session entry token on the data plane.** The URL `hellbox` opens carries
   an entry token (`?hbk=<per-session secret>`). The first navigation is only accepted if it
   presents that token; the served page then sets the HttpOnly `hellbox_control` cookie and
@@ -68,13 +70,19 @@ flowchart LR
 - **Launch Stack template bucket.** The template bucket serves `doom.yaml` only to
   requests made *via CloudFormation* (`aws:CalledVia` condition, TLS required). Anonymous
   internet reads get 403, while the console's Launch Stack flow works from any account.
-- **Wrong-account guard.** `hellbox deploy` records the account id it set things up in;
-  `play` and `destroy` compare the current credentials against it and refuse to act on a
-  mismatch, so a profile mixup can never aim a teardown at the wrong account. `destroy`
+- **Wrong-account guard.** `hellbox deploy` (and `deploy.sh`) records the account id it set
+  things up in; `play`, `destroy`, `up`, `down`, `rm`, `suspend` and `resume` compare the
+  current credentials against it and refuse to act on a mismatch, so a profile mixup can
+  never aim a teardown at the wrong account. `destroy`
   additionally requires a typed confirmation and only deletes resources that prove they
   are Hellbox's (stack template markers, bucket cross-checked against the stack's own
   outputs).
 - **Firecracker isolation in your own account.** No shared multi-tenant surface.
+- **Non-root stream daemons.** The three network-facing capsule servers — `websockify`
+  (:6901), `video_ws` (:6903) and `input_ws` (:6904) — run as uid 1000 (`app`), not root.
+  Only the supervisor/readiness hook and the X server stay root, and Xvnc binds loopback
+  only (`-localhost`), so its unauthenticated RFB port 5901 is never externally reachable
+  and is deliberately absent from the minted token's `allowedPorts`.
 - **Least-privilege IAM.** The build role has only `s3:GetObject` on the artifact bucket plus
   CloudWatch Logs writes. The execution role has no permissions, since the MicroVM never calls
   back into AWS. The bucket is private, encrypted (AES256), and expires build contexts after
@@ -100,19 +108,21 @@ The parts I deliberately left out of scope:
   channel into your game. The single-use, short-lived entry token narrows that to a race at
   the launch instant: only the first navigation to present the token establishes the session,
   it is consumed on use, and it expires seconds after the proxy starts whether used or not.
-  Two honest caveats. First, the token both bootstraps the session *and* unlocks control (one
-  session cookie gates the game stream and the suspend/resume/state endpoints alike), so a
-  race that beats your browser is not mere input griefing, it is a control-capable session for
-  the one MicroVM you own. This is inherent to a browser talking to a TCP loopback port, which
-  cannot bind a session to the peer's identity the way a Unix socket could; splitting control
-  onto a Unix socket would close it but would also remove the in-page suspend/resume, so this
-  demo keeps the buttons and accepts the residual. Second, single-use makes that race *loud,
-  not impossible*: whoever wins gets the token, and if the attacker wins your own browser gets
-  a spent token and the launch visibly fails, so a win cannot happen silently. The exposure
-  exists only while the proxy is running and only on a shared host, and it evaporates the
-  moment you are playing (token spent) or you quit (the listener and the in-memory secret are
-  gone). Hellbox assumes a single-user machine; on that machine there is no second user to
-  race and the case does not arise.
+  Two honest caveats. First, the token bootstraps the data-plane session (the
+  game stream and input); control actions additionally require a separate per-run token and
+  an `Origin` naming the bound port, so a cross-port *page* that only receives the cookie
+  cannot suspend or thaw your MicroVM. It does not help once a local process already holds
+  the cookie — such a process can fetch the served page and read the control token, which is
+  the residual below. This is still inherent to a browser talking to a TCP loopback port,
+  which cannot bind a session to the peer's identity the way a Unix socket could; a Unix
+  socket would close it but would also remove the in-page suspend/resume, so this demo keeps
+  the buttons and accepts that residual. Second, single-use
+  makes that race *loud, not impossible*: whoever wins gets the token, and if the attacker
+  wins your own browser gets a spent token and the launch visibly fails, so a win cannot
+  happen silently. The exposure exists only while the proxy is running and only on a shared
+  host, and it evaporates the moment you are playing (token spent) or you quit (the listener
+  and the in-memory secret are gone). Hellbox assumes a single-user machine; on that machine
+  there is no second user to race and the case does not arise.
 - **Cookie fixation is structurally impossible, not merely blocked.** The proxy *mints* the
   session secret server-side and the client never chooses it, so there is no attacker-set
   value to fixate. `SameSite=Strict` and `HttpOnly` stop a cross-origin set, the cookie's
@@ -120,6 +130,15 @@ The parts I deliberately left out of scope:
   can't write your cookie jar, and forging a request with a valid cookie needs the secret an
   attacker can't guess. The only route to a cookie the proxy will accept is reading the real
   one, which is the same-uid case already scoped out above.
+- **Cookies are not port-scoped.** RFC 6265 has no port isolation, so while `hellbox open` is
+  running the browser also sends `hellbox_control` to any other service on `127.0.0.1`. That
+  value authorizes the data plane only and lives for at most an hour; a cross-origin *browser*
+  page cannot read the served page or set the `x-hellbox-control` header, so it cannot drive
+  suspend/resume, and a cookie-only replay without the header and a same-port `Origin` is
+  refused. A local process that has already harvested the cookie can still fetch the page and
+  read the control token, so this raises the bar rather than erasing the leak; a process that
+  shares your uid is out of scope (above), and one that does not is the residual worth
+  accepting or fixing with a Unix socket.
 - **Your AWS credentials live on your machine** (via Granted, SSO, or environment variables),
   as with any AWS CLI or SDK use. They are never committed, and `.gitignore` excludes `.env`,
   `*.pem`, `*.key`, `aws-credentials*`, and `~/.hellbox/`. The binary reads credentials

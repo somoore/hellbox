@@ -107,4 +107,6 @@ RUN chmod +x /opt/capsule/start.sh /opt/capsule/run_app.sh
 # Documentation only — real exposure is the auth token's allowedPorts (6901-6904).
 # The readiness hook (:9000) is loopback-internal and deliberately NOT listed.
 EXPOSE 6901 6902 6903 6904
+# start.sh stays uid 0 (it needs /run, X sockets, and `runuser`), but it drops the
+# three network-facing stream daemons to `app` and starts Xvnc loopback-only.
 CMD ["/opt/capsule/start.sh"]

@@ -55,6 +55,29 @@ for req in $(git ls-files '*requirements*.txt'); do
   fi
 done
 
+echo "== CI tooling (pip/npx) =="
+# CI-installed linters execute repo-adjacent code on every run; pin them exactly so
+# a fresh (possibly malicious) release cannot be picked up silently. Hash pinning
+# lives with the product deps; these are dev tools, so exact versions are the floor.
+ci_unpinned_pip="$(git ls-files '.github/workflows/*.yml' \
+  | xargs -r grep -nE '(python3? -m pip|pip3?) install ' \
+  | grep -vE '==' || true)"
+ci_unpinned_npx="$(git ls-files '.github/workflows/*.yml' \
+  | xargs -r grep -nE 'npx[^|]*--yes' \
+  | grep -vE -- '--yes [^ ]+@[0-9]+\.[0-9]+\.[0-9]+' || true)"
+if [ -n "$ci_unpinned_pip" ] || [ -n "$ci_unpinned_npx" ]; then
+  if [ -n "$ci_unpinned_pip" ]; then
+    bad "unpinned pip install in CI:"
+    printf '%s\n' "$ci_unpinned_pip" >&2
+  fi
+  if [ -n "$ci_unpinned_npx" ]; then
+    bad "unpinned npx package in CI (need x.y.z):"
+    printf '%s\n' "$ci_unpinned_npx" >&2
+  fi
+else
+  ok "every CI pip/npx tool is pinned to an exact version"
+fi
+
 echo "== JavaScript (npm) =="
 # Any committed package.json must ship a lockfile (npm ci needs it for integrity).
 js_lockless=0

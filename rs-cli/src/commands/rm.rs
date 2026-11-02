@@ -21,6 +21,7 @@ pub async fn run(name: &str) -> Result<()> {
     let cap = state.get(name).cloned().unwrap_or_default();
     let (sdk, identity) =
         crate::aws::resolve_with_profile(&cfg.region, cfg.aws_profile.as_deref()).await?;
+    crate::aws::require_same_account(&cfg, &identity)?;
     let aws = Aws::from_sdk_config(&sdk);
     let image_arn = cap
         .image_arn

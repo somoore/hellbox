@@ -139,9 +139,9 @@ Commands that touch AWS start with an identity check. If credentials are missing
 expired you get a plain explanation and the usual fixes (`aws sso login`, `assume`,
 `AWS_PROFILE`) instead of an SDK stack trace. `hellbox deploy` prints the identity it is
 about to use and records the account id (and `AWS_PROFILE`, when set) in `config.toml`.
-`hellbox play` and `hellbox destroy` compare the current account against that record and
-refuse to act on a mismatch, so switching profiles can never point a destroy at the wrong
-account.
+`hellbox play` and the other mutating commands (`destroy`, `up`, `down`, `rm`, `suspend`,
+`resume`) compare the current account against that record and refuse to act on a mismatch, so
+switching profiles can never point a destroy at the wrong account.
 
 Region resolution for `deploy`: the `-r` flag, then `AWS_REGION`, then
 `AWS_DEFAULT_REGION`, then an existing `config.toml`, then your AWS profile's `region`

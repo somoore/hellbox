@@ -175,8 +175,11 @@ command -v awk >/dev/null || die "awk is required"
 if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
   die "sha256sum or shasum is required"
 fi
-aws sts get-caller-identity >/dev/null 2>&1 \
-  || die "AWS credentials aren't working — configure the AWS CLI (or assume a role) first"
+if ! ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text 2>/dev/null)"; then
+  die "AWS credentials aren't working — configure the AWS CLI (or assume a role) first"
+fi
+[ -n "$ACCOUNT_ID" ] && [ "$ACCOUNT_ID" != "None" ] \
+  || die "could not read the AWS account id"
 [ -f deploy/doom.yaml ] || die "run this from the repo root (deploy/doom.yaml not found)"
 [ -d capsule ] || die "run this from the repo root (capsule/ not found)"
 
@@ -203,6 +206,7 @@ build_role_arn     = "$BUILD_ROLE"
 execution_role_arn = "$EXEC_ROLE"
 base_image_arn     = "arn:aws:lambda:$REGION:aws:microvm-image:al2023-1"
 display            = "h264"
+aws_account_id     = "$ACCOUNT_ID"
 EOF
 say "Wrote $HOME_DIR/config.toml"
 

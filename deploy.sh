@@ -178,8 +178,9 @@ fi
 if ! ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text 2>/dev/null)"; then
   die "AWS credentials aren't working — configure the AWS CLI (or assume a role) first"
 fi
-[ -n "$ACCOUNT_ID" ] && [ "$ACCOUNT_ID" != "None" ] \
-  || die "could not read the AWS account id"
+if [ -z "$ACCOUNT_ID" ] || [ "$ACCOUNT_ID" = "None" ]; then
+  die "could not read the AWS account id"
+fi
 [ -f deploy/doom.yaml ] || die "run this from the repo root (deploy/doom.yaml not found)"
 [ -d capsule ] || die "run this from the repo root (capsule/ not found)"
 

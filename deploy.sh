@@ -211,7 +211,10 @@ aws_account_id     = "$ACCOUNT_ID"
 EOF
 say "Wrote $HOME_DIR/config.toml"
 
-# CLI.
+# CLI. Export HELLBOX_HOME so the CLI reads the config this script just wrote:
+# without it, a legacy LAMBDADOOM_HOME still exported from an old install would
+# make the CLI resolve the old ~/.lambdadoom config/state instead of this one.
+export HELLBOX_HOME="$HOME_DIR"
 HELLBOX="$(resolve_hellbox)"
 say "Using hellbox CLI: $HELLBOX"
 

@@ -164,9 +164,11 @@ remove_local_home(){
 
 # Stop a running loopback proxy (`hellbox open`) if one is still up — uninstall
 # should be self-contained whether or not the user Ctrl-C'd it first. Targets only
-# the hellbox proxy by command pattern; harmless if none is running.
+# the hellbox/ldoom proxy by command pattern; harmless if none is running.
+# Legacy LambdaDoom installs still run the proxy as `ldoom open`, so match both
+# binary names (-f scans the full command line).
 if command -v pkill >/dev/null 2>&1; then
-  if pkill -f 'hellbox(\.exe)? open' 2>/dev/null; then
+  if pkill -f '(hellbox|ldoom)(\.exe)? open' 2>/dev/null; then
     say "Stopped the running hellbox proxy"
   fi
 fi
